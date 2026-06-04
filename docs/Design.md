@@ -40,24 +40,26 @@ All other architectural decisions from v1.0 are retained unchanged. IMU, GPS geo
 
 ### System Context
 
+
 ```mermaid
-C4Context
-    title Smart Attendance Registry v2.0 — System Context
-    Person(student, "Student", "Android app — joins sessions, sends heartbeats")
-    Person(teacher, "Teacher", "Dashboard — manages sessions, views attendance")
-    Person(admin, "Admin", "Dashboard admin view — reviews overrides")
-    System_Boundary(sar, "Smart Attendance Registry") {
-        System(backend, "Backend Server", "Node.js/Express REST + WebSocket")
-        System(dashboard, "Teacher Dashboard", "React SPA served by Nginx")
-        System(android, "Android App", "Kotlin MVVM with Foreground Service")
-        SystemDb(db, "PostgreSQL", "Persistent attendance data store")
-    }
-    Rel(student, android, "Joins sessions, views status")
-    Rel(teacher, dashboard, "Manages sessions, views reports")
-    Rel(admin, dashboard, "Reviews and overrides attendance")
-    Rel(android, backend, "REST heartbeats + WebSocket events")
-    Rel(dashboard, backend, "REST session management + WebSocket events")
-    Rel(backend, db, "Reads/writes all persistent state")
+flowchart LR
+
+    Student[Student]
+    Teacher[Teacher]
+    Admin[Admin]
+
+    Android[Android App<br/>Kotlin MVVM]
+    Dashboard[Teacher Dashboard<br/>React SPA]
+    Backend[Backend Server<br/>Node.js + Express]
+    DB[(PostgreSQL)]
+
+    Student -->|Joins sessions<br/>Views status| Android
+    Teacher -->|Manages sessions<br/>Views attendance| Dashboard
+    Admin -->|Reviews overrides| Dashboard
+
+    Android -->|REST + WebSocket| Backend
+    Dashboard -->|REST + WebSocket| Backend
+    Backend -->|Read/Write| DB
 ```
 
 ### Component Interaction (Updated Sequence)
