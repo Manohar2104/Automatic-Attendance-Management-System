@@ -13,5 +13,5 @@ export async function hasPermission(userId: string, permission: string) {
     WHERE ur.user_id = $1 AND p.name = $2 LIMIT 1
   `;
   const r = await pool.query(q, [userId, permission]);
-  return r.rowCount > 0;
+  return (r.rowCount ?? 0) > 0;
 }
