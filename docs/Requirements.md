@@ -1,4 +1,3 @@
----
 
 ## SECTION 11: Updated Requirements Document
 
