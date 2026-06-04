@@ -70,7 +70,7 @@ sequenceDiagram
     participant A as Android App
 
     T->>B: POST /auth/login
-    B-->>T: {accessToken, refreshToken}
+    B-->>T: accessToken, refreshToken
     T->>B: POST /sessions {classroomId, courseName, joinWindowMinutes?, presenceThresholdPresent?, presenceThresholdPartial?}
     B->>DB: INSERT session (ACTIVE, thresholds stored)
     B-->>T: {sessionId}
@@ -78,17 +78,18 @@ sequenceDiagram
 
     loop Every 30 seconds
         B->>B: Token_Engine rotates token
-        B-)A: WS: NEW_TOKEN {token, sequenceNumber}
+        B->>A: NEW_TOKEN(token, sequenceNumber)
     end
 
     loop Every 30 seconds
-        A->>B: POST /heartbeat {studentId, sessionId, seqNo, tokenHmac, fingerprint, ts, deviceFingerprint}
+        A->>B: POST heartbeat(studentId, sessionId, seqNo, tokenHmac, fingerprint)
         B->>B: Validate: rate → HMAC → seqNo → timestamp → deviceBinding
         B->>B: Fingerprint_Engine classifies scan
         B->>DB: INSERT heartbeat, UPDATE attendance (transaction)
         B->>B: Confidence_Engine recomputes score
-        B-)A: WS: HEARTBEAT_ACK {seqNo, serverTs, fingerprintResult}
-        B-)T: WS: SCORE_UPDATE {studentId, score, breakdown}
+        B->>A: HEARTBEAT_ACK(seqNo, serverTs, fingerprintResult)
+
+        B->>T: SCORE_UPDATE(studentId, score, breakdown)
     end
 
     T->>B: POST /sessions/:id/end
@@ -177,12 +178,12 @@ sequenceDiagram
     participant B as Backend
     participant DB as PostgreSQL
 
-    Admin->>B: POST /admin/sessions/:id/attendance/:studentId/override
-         {overrideStatus: "PRESENT", justification: "Technical failure"}
+   Admin->>B: POST attendance override
+    Note over Admin,B: status=PRESENT, reason=Technical failure
     B->>DB: SELECT status FROM attendance WHERE session_id=? AND student_id=?
     B->>DB: INSERT INTO attendance_overrides (originalStatus, overrideStatus, adminId, justification)
     B->>DB: UPDATE attendance SET status = overrideStatus WHERE ...
-    B-->>Admin: HTTP 200 {overrideId, originalStatus, newStatus}
+    B->>Admin: HTTP 200 Override successful
 ```
 
 **`attendance_overrides` Table**
