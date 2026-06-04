@@ -14,6 +14,11 @@ Quick start (requires Docker and Docker Compose):
 cp .env.example .env
 ```
 
+Note on Neon production variables (placeholders):
+
+- `DATABASE_URL` should point to the Neon pooler URL (set as environment variable in production).
+- `DIRECT_URL` is the Neon direct/admin URL used for privileged operations (migrations that require extension creation). Do not commit real credentials to the repository; store them in CI secrets or runtime environment configuration.
+
 2. Start services:
 
 ```powershell

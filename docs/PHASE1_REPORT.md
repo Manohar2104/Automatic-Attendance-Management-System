@@ -110,6 +110,17 @@ Phase 1 scope (per docs/SAR_MVP_Roadmap.md):
 - Adding migrations for `device_bindings` and `attendance_overrides` in Phase 1 ensures later phases can rely on these tables; their early inclusion does NOT implement or expose behavior — only schema.
 - Docker networking names and environment variable keys established in Phase 1 must remain stable; any change requires impact analysis and approval.
 
+Note on Neon production environment variables:
+
+- Do NOT commit real Neon connection strings or credentials to the repository. Use the following placeholders in config files and set the real values in the runtime environment or CI:
+  - `DATABASE_URL=<neon_pooler_url>`
+  - `DIRECT_URL=<neon_direct_url>`
+
+Migration guidance for Neon:
+
+- The application should use `DATABASE_URL` (pooler) for runtime connections.
+- For administrative migration steps that require extension creation (e.g., enabling PostGIS), use `DIRECT_URL` or Neon control plane to enable extensions before running those migrations.
+
 ---
 
 5) Next steps (upon approval to proceed with file creation and scaffolding):

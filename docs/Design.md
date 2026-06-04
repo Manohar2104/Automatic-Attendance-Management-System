@@ -349,3 +349,15 @@ async function assignAttendanceStatus(sessionId, studentId, score) {
 
 - Full override flow: Create session → join → send heartbeats → end session → verify ABSENT → admin overrides to PRESENT → verify attendance.status = PRESENT → verify override record in DB.
 - Device binding flow: Student logs in from device A → binding created → logs in from device B → second binding created → logs in from device C → HTTP 409.
+
+
+## Supporting Architecture Documents
+
+The following documents are considered part of the approved architecture:
+
+- DATABASE_ARCHITECTURE.md
+- DATABASE_SCHEMA.md
+- API_SPECIFICATION.md
+- PROJECT_STRUCTURE.md
+
+These documents extend the implementation details while preserving the approved Requirements v2.0, Design v2.0, Implementation Plan v2.0, and Roadmap v2.0.
