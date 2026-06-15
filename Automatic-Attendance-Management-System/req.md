@@ -1,0 +1,1 @@
+# pip install fastapi uvicorn sqlalchemy asyncpg alembic pydantic redis httpx
