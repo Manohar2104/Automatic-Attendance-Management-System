@@ -1,4 +1,5 @@
 import { pool } from '../config/db';
+import { finalizeAttendanceForSession as finalizeAttendanceService } from './attendanceFinalizationService';
 import type { PoolClient } from 'pg';
 
 export type SessionThresholdInput = {
@@ -166,7 +167,7 @@ export async function createSession(input: SessionCreateInput) {
 
 // TODO(Requirement 4 AC #2): broadcast SESSION_STARTED via WebSocket in Phase 6.
 export async function finalizeAttendanceForSession(sessionId: string) {
-  return { sessionId, queued: true };
+  return finalizeAttendanceService(sessionId);
 }
 
 export async function endSession(sessionId: string) {
