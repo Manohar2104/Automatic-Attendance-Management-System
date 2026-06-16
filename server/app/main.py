@@ -1,6 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Body
+from typing import List
+from contextlib import asynccontextmanager
 from .schemas import HealthCheck, UserCreate, Token
-from .db import engine, Base, get_db
+from .db import Base, get_db
 from .config import settings
 from .models import User
 from .auth import get_password_hash, verify_password, create_access_token
@@ -8,24 +10,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import asyncio
 import datetime
-from .schemas import DeviceRegister, PresenceEvent
+from .schemas import DeviceRegister, PresenceEvent, DeviceInfo
 from .models import DeviceBinding, Event, EventType, Attendance, AttendanceStatus, AttendanceOverride
 from sqlalchemy import insert
 import uuid
+from .auth import require_current_user, get_current_user
+from sqlalchemy.exc import IntegrityError
+from .config import settings
 
-app = FastAPI(title="Smart Attendance Registry")
+# initialize find3 subscriber if configured
+from .find3_subscriber import init_subscriber, start_subscriber, stop_subscriber
 
 
-@app.on_event("startup")
-async def startup():
-    # create tables if they don't exist
-    async with engine.begin() as conn:
+@asynccontextmanager
+async def lifespan(app):
+    # startup
+    init_subscriber(app)
+    from .db import get_engine
+    eng = get_engine()
+    async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await start_subscriber(app)
+    yield
+    # shutdown
+    await stop_subscriber(app)
+
+
+app = FastAPI(title="Smart Attendance Registry", lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthCheck)
 async def health(db: AsyncSession = Depends(get_db)):
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     return HealthCheck(status="ok", now=now)
 
 
@@ -57,14 +73,60 @@ async def login(payload: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @app.post('/register-device')
-async def register_device(payload: DeviceRegister, db: AsyncSession = Depends(get_db)):
-    # naive device registration: attach to a user via token in header (not implemented here)
-    # For now, just create a DeviceBinding without user association to allow testing
-    binding = DeviceBinding(user_id=None, device_fingerprint=payload.device_fingerprint)
+async def register_device(payload: DeviceRegister, db: AsyncSession = Depends(get_db), current_user=Depends(require_current_user)):
+    # Attach a device to the current authenticated user, enforcing max devices
+    q = await db.execute(select(DeviceBinding).where(DeviceBinding.user_id == current_user.id, DeviceBinding.status == 'ACTIVE'))
+    bound = q.scalars().all()
+    if len(bound) >= settings.max_devices_per_user:
+        raise HTTPException(status_code=400, detail=f"Max devices ({settings.max_devices_per_user}) reached")
+    # ensure fingerprint isn't already bound
+    q2 = await db.execute(select(DeviceBinding).where(DeviceBinding.device_fingerprint == payload.device_fingerprint))
+    existing = q2.scalars().first()
+    if existing:
+        # if already bound to another user, reject
+        if existing.user_id != current_user.id:
+            raise HTTPException(status_code=400, detail="Device fingerprint already registered to another user")
+        return {"id": str(existing.id), "device_fingerprint": existing.device_fingerprint}
+    binding = DeviceBinding(user_id=current_user.id, device_fingerprint=payload.device_fingerprint)
     db.add(binding)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Device fingerprint already registered")
     await db.refresh(binding)
-    return {"id": str(binding.id), "device_fingerprint": binding.device_fingerprint}
+    return DeviceInfo(id=str(binding.id), device_fingerprint=binding.device_fingerprint, status=binding.status.value, last_seen_at=binding.last_seen_at)
+
+
+@app.get('/devices')
+async def list_devices(db: AsyncSession = Depends(get_db), current_user=Depends(require_current_user)):
+    q = await db.execute(select(DeviceBinding).where(DeviceBinding.user_id == current_user.id))
+    rows = q.scalars().all()
+    out = []
+    for r in rows:
+        out.append(DeviceInfo(id=str(r.id), device_fingerprint=r.device_fingerprint, status=r.status.value, last_seen_at=r.last_seen_at))
+    return out
+
+
+@app.post('/devices/{device_id}/revoke')
+async def revoke_device(device_id: str, db: AsyncSession = Depends(get_db), current_user=Depends(require_current_user)):
+    from uuid import UUID as UUID_type
+    try:
+        device_uuid = UUID_type(device_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid device ID format")
+    
+    q = await db.execute(select(DeviceBinding).where(DeviceBinding.id == device_uuid))
+    binding = q.scalars().first()
+    if not binding:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if binding.user_id != current_user.id and current_user.role != 'ADMIN':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    binding.status = 'REVOKED'
+    binding.revoked_at = datetime.datetime.now(datetime.timezone.utc)
+    binding.revoked_by = current_user.id
+    await db.commit()
+    return {"status": "revoked"}
 
 
 @app.post('/presence')
@@ -77,32 +139,236 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
     # don't invent a user_id for anonymous devices; leave null
     ev = Event(user_id=user_id, session_id=payload.session_id, type=EventType.ENTER if payload.event_type == 'ENTER' else EventType.LEAVE, location=payload.location)
     db.add(ev)
+    # update device binding last_seen and status if bound
+    if binding:
+        binding.last_seen_at = datetime.datetime.now(datetime.timezone.utc)
+        binding.status = binding.status or 'ACTIVE'
+        db.add(binding)
     await db.commit()
     await db.refresh(ev)
     return {"id": str(ev.id)}
 
 
 @app.post('/compute-attendance/{session_id}')
-async def compute_attendance(session_id: str, db: AsyncSession = Depends(get_db)):
-    # Very small confidence engine: counts ENTER events per user in session and assigns status
+async def compute_attendance(session_id: str, location_filter: str = None, db: AsyncSession = Depends(get_db)):
+    """
+    Compute attendance for a session with location-based validation.
+    If location_filter is provided, only count events from that location.
+    """
+    from .schemas import ComputeAttendanceResponse, AttendanceResult
+    
     q = await db.execute(select(Event).where(Event.session_id == session_id))
     events = q.scalars().all()
 
-    counts: dict = {}
+    # Filter events by location if provided
+    if location_filter:
+        events = [e for e in events if e.location == location_filter]
+
+    # Group events by user
+    user_events: dict = {}
     for e in events:
-        # ignore anonymous events (no bound user)
         if not e.user_id:
             continue
-        if e.type == EventType.ENTER:
-            counts.setdefault(e.user_id, 0)
-            counts[e.user_id] += 1
+        user_events.setdefault(e.user_id, []).append(e)
+
+    # Determine session window from events
+    if events:
+        timestamps = [e.timestamp for e in events if e.timestamp is not None]
+        start = min(timestamps)
+        end = max(timestamps)
+        duration_seconds = max(1, int((end - start).total_seconds()))
+    else:
+        start = None
+        end = None
+        duration_seconds = 0
+
+    max_possible = 0
+    if duration_seconds:
+        max_possible = max(1, duration_seconds // settings.submission_interval_seconds)
 
     results = []
-    for user_id, cnt in counts.items():
-        raw_score = min(100, cnt * 10)
-        status_enum = AttendanceStatus.PRESENT if raw_score >= 85 else AttendanceStatus.PARTIAL if raw_score >= 60 else AttendanceStatus.ABSENT
+    bound_count = 0
+    for user_id, evs in user_events.items():
+        bound_count += 1
+        enter_count = sum(1 for e in evs if e.type == EventType.ENTER)
+        raw_score = min(100, int((enter_count / max_possible) * 100)) if max_possible else 0
+        status_enum = AttendanceStatus.PRESENT if raw_score >= settings.present_threshold_percent else AttendanceStatus.PARTIAL if raw_score >= settings.partial_threshold_percent else AttendanceStatus.ABSENT
         attendance = Attendance(student_id=user_id, session_id=session_id, score=raw_score, status=status_enum)
         db.add(attendance)
-        results.append({"user_id": str(user_id), "score": raw_score, "status": status_enum.value})
+        location_match = location_filter is None or any(e.location == location_filter for e in evs)
+        results.append(AttendanceResult(
+            user_id=str(user_id),
+            score=raw_score,
+            status=status_enum.value,
+            enter_count=enter_count,
+            location_match=location_match
+        ))
+
+    # crowd check
+    crowd_ok = bound_count >= settings.min_crowd_size
+    location_validated = location_filter is not None
+
     await db.commit()
-    return {"session_id": session_id, "results": results}
+    return ComputeAttendanceResponse(
+        session_id=session_id,
+        duration_seconds=duration_seconds,
+        max_possible_submissions=max_possible,
+        bound_devices=bound_count,
+        crowd_ok=crowd_ok,
+        location_validated=location_validated,
+        results=results
+    )
+
+
+@app.post('/sessions/create')
+async def create_session(
+    course_id: str,
+    room_id: str,
+    location: str,
+    scheduled_start: str,
+    scheduled_end: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    """Create a new session. Only admin can create."""
+    if current_user.role != 'ADMIN':
+        raise HTTPException(status_code=403, detail="Only admins can create sessions")
+    
+    from .models import Session, SessionStatus
+    from datetime import datetime as dt
+    
+    session = Session(
+        course_id=course_id,
+        room_id=room_id,
+        location=location,
+        scheduled_start=dt.fromisoformat(scheduled_start),
+        scheduled_end=dt.fromisoformat(scheduled_end),
+        status=SessionStatus.SCHEDULED
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    return {
+        "id": str(session.id),
+        "course_id": session.course_id,
+        "location": session.location,
+        "scheduled_start": session.scheduled_start.isoformat(),
+        "scheduled_end": session.scheduled_end.isoformat(),
+        "status": session.status.value
+    }
+
+
+@app.post('/sessions/bulk-upload')
+async def bulk_upload_timetable(
+    entries: List[dict] = Body(...),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    """
+    Bulk upload timetable entries and create sessions.
+    entries: list of {course_id, room_id, location, scheduled_start, scheduled_end}
+    """
+    if current_user.role != 'ADMIN':
+        raise HTTPException(status_code=403, detail="Only admins can upload timetable")
+    
+    from .models import Session, SessionStatus
+    from datetime import datetime as dt
+    
+    created = []
+    for entry in entries:
+        try:
+            scheduled_start = dt.fromisoformat(entry.get('scheduled_start')) if isinstance(entry.get('scheduled_start'), str) else entry.get('scheduled_start')
+            scheduled_end = dt.fromisoformat(entry.get('scheduled_end')) if isinstance(entry.get('scheduled_end'), str) else entry.get('scheduled_end')
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid entry format: {str(e)}")
+        
+        session = Session(
+            course_id=entry.get('course_id'),
+            room_id=entry.get('room_id'),
+            location=entry.get('location'),
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            status=SessionStatus.SCHEDULED
+        )
+        db.add(session)
+        created.append(session)
+    
+    await db.commit()
+    return {
+        "created": len(created),
+        "sessions": [
+            {
+                "id": str(s.id),
+                "course_id": s.course_id,
+                "location": s.location,
+                "status": s.status.value
+            }
+            for s in created
+        ]
+    }
+
+
+@app.get('/sessions')
+async def list_sessions(db: AsyncSession = Depends(get_db), current_user=Depends(require_current_user)):
+    """List all sessions."""
+    from .models import Session
+    q = await db.execute(select(Session).order_by(Session.scheduled_start))
+    sessions = q.scalars().all()
+    return [
+        {
+            "id": str(s.id),
+            "course_id": s.course_id,
+            "location": s.location,
+            "scheduled_start": s.scheduled_start.isoformat(),
+            "scheduled_end": s.scheduled_end.isoformat(),
+            "status": s.status.value
+        }
+        for s in sessions
+    ]
+
+
+@app.post('/sessions/{session_id}/override-attendance')
+async def override_attendance(
+    session_id: str,
+    student_id: str,
+    override_status: str,
+    justification: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    """Admin override attendance for a student."""
+    if current_user.role != 'ADMIN':
+        raise HTTPException(status_code=403, detail="Only admins can override attendance")
+    
+    # Find existing attendance record
+    q = await db.execute(
+        select(Attendance).where(
+            (Attendance.session_id == session_id) &
+            (Attendance.student_id == student_id)
+        )
+    )
+    attendance = q.scalars().first()
+    if not attendance:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    
+    # Create override record
+    from .models import AttendanceOverride
+    override = AttendanceOverride(
+        attendance_id=attendance.id,
+        admin_id=current_user.id,
+        original_status=attendance.status,
+        override_status=AttendanceStatus[override_status],
+        justification=justification
+    )
+    db.add(override)
+    
+    # Update attendance status
+    attendance.status = AttendanceStatus[override_status]
+    await db.commit()
+    
+    return {
+        "attendance_id": str(attendance.id),
+        "original_status": override.original_status.value,
+        "new_status": attendance.status.value,
+        "justification": justification
+    }

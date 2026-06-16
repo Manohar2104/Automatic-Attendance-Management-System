@@ -35,13 +35,13 @@ class DeviceBinding(Base):
     __tablename__ = "device_bindings"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # user_id may be null until a device is bound to a user
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    device_fingerprint = Column(String(255), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    device_fingerprint = Column(String(255), nullable=False, unique=True, index=True)
     status = Column(Enum(BindingStatus), default=BindingStatus.ACTIVE, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
-    revoked_by = Column(UUID(as_uuid=True), nullable=True)
+    revoked_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
 
 class Attendance(Base):
@@ -51,6 +51,26 @@ class Attendance(Base):
     session_id = Column(String(255), nullable=False)
     score = Column(Float, nullable=True)
     status = Column(Enum(AttendanceStatus), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class SessionStatus(str, enum.Enum):
+    SCHEDULED = "SCHEDULED"
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    course_id = Column(String(255), nullable=False)
+    room_id = Column(String(255), nullable=False)
+    location = Column(String(255), nullable=False)  # friendly name/room number
+    scheduled_start = Column(DateTime(timezone=True), nullable=False)
+    scheduled_end = Column(DateTime(timezone=True), nullable=False)
+    actual_start = Column(DateTime(timezone=True), nullable=True)
+    actual_end = Column(DateTime(timezone=True), nullable=True)
+    status = Column(Enum(SessionStatus), default=SessionStatus.SCHEDULED, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
