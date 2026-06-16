@@ -54,15 +54,7 @@ CREATE TABLE IF NOT EXISTS rolling_tokens (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- 5) Refresh tokens: hashed storage for refresh tokens (auth in later phases)
-CREATE TABLE IF NOT EXISTS refresh_tokens (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  student_id UUID REFERENCES students(id) ON DELETE CASCADE,
-  token_hash VARCHAR(255) NOT NULL,
-  revoked BOOLEAN NOT NULL DEFAULT FALSE,
-  issued_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMP
-);
+
 
 -- 6) Attendance weights: configurable weights per session (or global when session_id IS NULL)
 CREATE TABLE IF NOT EXISTS attendance_weights (

@@ -23,7 +23,21 @@ CREATE TABLE IF NOT EXISTS device_bindings (
   last_ip inet,
   revoked boolean NOT NULL DEFAULT false
 );
-CREATE INDEX IF NOT EXISTS device_bindings_user_idx ON device_bindings(user_id);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'device_bindings'
+          AND column_name = 'user_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS device_bindings_user_idx
+            ON device_bindings(user_id);
+    ELSE
+        RAISE NOTICE 'Skipped device_bindings_user_idx because user_id does not exist';
+    END IF;
+END $$;
 
 -- Refresh tokens (store token hash only)
 CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -37,8 +51,36 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   expires_at timestamptz NOT NULL,
   replaced_by uuid NULL
 );
-CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx ON refresh_tokens(user_id);
-CREATE INDEX IF NOT EXISTS refresh_tokens_device_idx ON refresh_tokens(device_id);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'refresh_tokens'
+          AND column_name = 'user_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx
+            ON refresh_tokens(user_id);
+    ELSE
+        RAISE NOTICE 'Skipped refresh_tokens_user_idx because user_id does not exist';
+    END IF;
+END $$;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'refresh_tokens'
+          AND column_name = 'device_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS refresh_tokens_device_idx
+            ON refresh_tokens(device_id);
+    ELSE
+        RAISE NOTICE 'Skipped refresh_tokens_device_idx because device_id does not exist';
+    END IF;
+END $$;
 
 -- RBAC tables
 CREATE TABLE IF NOT EXISTS roles (

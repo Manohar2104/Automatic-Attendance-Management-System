@@ -37,18 +37,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Device bindings table (per approved Tasks)
-CREATE TABLE IF NOT EXISTS device_bindings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  student_id UUID NOT NULL REFERENCES students(id),
-  device_fingerprint VARCHAR(255) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  last_seen_at TIMESTAMP,
-  revoked_at TIMESTAMP,
-  revoked_by UUID,
-  UNIQUE(student_id, device_fingerprint)
-);
 
 -- Attendance overrides table (per approved Tasks)
 CREATE TABLE IF NOT EXISTS attendance_overrides (

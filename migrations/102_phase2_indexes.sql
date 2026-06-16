@@ -15,9 +15,7 @@ CREATE INDEX IF NOT EXISTS idx_heartbeats_session_student_seq ON heartbeats(sess
 -- 4) Indexes for rolling tokens
 CREATE INDEX IF NOT EXISTS idx_rolling_tokens_session_seq ON rolling_tokens(session_id, sequence_number);
 
--- 5) Index for refresh tokens
-CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_tokens_tokenhash ON refresh_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_student ON refresh_tokens(student_id);
+
 
 -- 6) Index for attendance_weights
 CREATE INDEX IF NOT EXISTS idx_attendance_weights_session ON attendance_weights(session_id);
