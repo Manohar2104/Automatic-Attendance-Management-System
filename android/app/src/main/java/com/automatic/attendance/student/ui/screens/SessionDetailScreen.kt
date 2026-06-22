@@ -19,7 +19,7 @@ import com.automatic.attendance.student.storage.SecureTokenStorageImpl
 import com.automatic.attendance.student.viewmodel.SessionViewModel
 import com.automatic.attendance.student.viewmodel.HeartbeatViewModel
 import com.automatic.attendance.student.viewmodel.JoinUiState
-import com.automatic.attendance.student.ui.navigation.Routes
+
 
 @Composable
 fun SessionDetailScreen(
@@ -50,9 +50,7 @@ fun SessionDetailScreen(
         mutableStateOf<String?>(null)
     }
 
-    var isJoined by remember {
-        mutableStateOf(false)
-    }
+    
 
     LaunchedEffect(Unit) {
         try {
@@ -106,7 +104,7 @@ fun SessionDetailScreen(
 
             is JoinUiState.Joined -> {
     Text("Join successful")
-    isJoined = true
+    
 
     
 }
@@ -118,22 +116,7 @@ fun SessionDetailScreen(
             else -> {}
         }
 
-        if (isJoined) {
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = {
-                    navController.navigate(
-                        Routes.CURRENT_ATTENDANCE.replace(
-                            "{sessionId}",
-                            sessionId
-                        )
-                    )
-                }
-            ) {
-                Text("View Current Attendance")
-            }
-        }
+       
 
         message?.let {
             Spacer(modifier = Modifier.height(8.dp))

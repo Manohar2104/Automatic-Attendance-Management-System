@@ -15,7 +15,7 @@ import com.automatic.attendance.student.ui.navigation.Routes
 
 class MainActivity : ComponentActivity() {
 
-    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         listOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -56,8 +56,16 @@ class MainActivity : ComponentActivity() {
             this,
             Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
+        val hasNearbyWifiPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.NEARBY_WIFI_DEVICES
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
 
-        if (!hasLocationPermission) {
+        if (!hasLocationPermission || !hasNearbyWifiPermission) {
             requestPermissionsLauncher.launch(permissions.toTypedArray())
         }
     }

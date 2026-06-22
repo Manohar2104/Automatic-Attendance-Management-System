@@ -171,12 +171,8 @@ class HeartbeatForegroundService : Service() {
                     return@launch
                 }
 
-                // Request a fresh Wi-Fi scan
-wifiManager.startScan()
-
-// Read the latest available scan results
-val fingerprint =
-    wifiManager.getWifiFingerprint()
+                // Request a fresh Wi-Fi fingerprint snapshot with bounded wait handled by WifiScanManager.
+                val fingerprint = wifiManager.getWifiFingerprint()
 
 val seq =
     repo.getNextSequenceNumber()

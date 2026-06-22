@@ -2,6 +2,7 @@ import express from 'express';
 import { pool } from './config/db';
 import { runMigrations } from './scripts/migrate';
 import authRoutes from './routes/authRoutes';
+import attendanceRoutes from './routes/attendanceRoutes';
 import heartbeatRoutes from './routes/heartbeatRoutes';
 import fingerprintRoutes from './routes/fingerprintRoutes';
 import sessionRoutes from './routes/sessionRoutes';
@@ -12,6 +13,7 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 app.use(express.json());
 
 app.use('/auth', authRoutes);
+app.use('/attendance', attendanceRoutes);
 app.use('/heartbeats', heartbeatRoutes);
 app.use('/fingerprints', fingerprintRoutes);
 app.use('/sessions', sessionRoutes);
