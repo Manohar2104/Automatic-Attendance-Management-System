@@ -48,6 +48,7 @@
 | Server accessible at `http://10.11.49.128:8100` (USB tethering) | ✅ |
 | Network security config (cleartext for local IPs) | ✅ |
 | Android shows "Server: Connected" with WiFi icon | ✅ |
+| CI/CD Pipeline (GitHub Actions workflow running ruff, black, mypy, pytest with Redis, and building debug APK) | ✅ |
 
 ---
 
@@ -65,12 +66,6 @@
 
 ## 📋 REMAINING - PRIORITY ORDER
 
-
-### 5. CI/CD Pipeline (Medium)
-GitHub Actions workflow:
-- Trigger: push to main, PR
-- Jobs: lint (ruff, mypy, black), test (pytest + coverage), build-android (gradle assembleDebug, upload APK)
-- Caching: pip, gradle
 
 ### 6. Staging Deployment (Medium)
 - Deploy FastAPI (systemd/docker) with real find3 WebSocket URL
