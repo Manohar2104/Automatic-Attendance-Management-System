@@ -68,11 +68,12 @@
 
 
 ### 6. Staging Deployment (Medium)
-- Deploy FastAPI (systemd/docker) with real find3 WebSocket URL
-- Configure NeonDB PostgreSQL
-- Run find3 fingerprinting for each classroom
-- Load test: 50 concurrent devices, 10 sessions/day
-- Monitor: WiFiScanService persistence, PresenceWorker Doze mode behavior
+- [x] Configure NeonDB PostgreSQL and execute schema migrations (done)
+- [x] Configure FastAPI Docker Compose environment to load staging settings from env file (done)
+- [ ] Deploy stack on staging server and connect find3 WebSocket URL
+- [ ] Run find3 fingerprinting for each classroom
+- [ ] Load test: 50 concurrent devices, 10 sessions/day
+- [ ] Monitor: WiFiScanService persistence, PresenceWorker Doze mode behavior
 
 ### 7. Background Worker Reliability (Medium)
 Android-specific hardening:
