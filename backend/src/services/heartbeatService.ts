@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import type { PoolClient } from 'pg';
 import { pool } from '../config/db';
 import { computeConfidence } from './confidenceService';
@@ -78,6 +79,8 @@ type HeartbeatOutcome =
 
 const BSSID_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 const MAX_WIFI_ENTRIES = 20;
+const ROLLING_TOKEN_LIFETIME_MS = 60_000;
+const ROLLING_TOKEN_ROTATION_LEAD_MS = 15_000;
 
 function createError(message: string, statusCode: number) {
   const error = new Error(message);
@@ -305,6 +308,86 @@ async function loadActiveRollingToken(client: PoolClient, sessionId: string, cli
     [sessionId, clientTimestamp.toISOString()]
   );
   return result.rowCount ? result.rows[0] : null;
+}
+
+async function loadRollingTokenBySequence(client: PoolClient, sessionId: string, sequenceNumber: number) {
+  const result = await client.query<RollingTokenRow>(
+    `SELECT id, session_id, sequence_number, token_hash, valid_from, valid_to
+       FROM rolling_tokens
+      WHERE session_id = $1
+        AND sequence_number = $2
+      LIMIT 1`,
+    [sessionId, sequenceNumber]
+  );
+  return result.rowCount ? result.rows[0] : null;
+}
+
+async function persistRollingToken(client: PoolClient, params: {
+  sessionId: string;
+  sequenceNumber: number;
+  tokenHash: string;
+  validFrom: Date;
+  validTo: Date;
+}) {
+  const result = await client.query<RollingTokenRow>(
+    `INSERT INTO rolling_tokens (session_id, sequence_number, token_hash, valid_from, valid_to)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, session_id, sequence_number, token_hash, valid_from, valid_to`,
+    [
+      params.sessionId,
+      params.sequenceNumber,
+      params.tokenHash,
+      params.validFrom.toISOString(),
+      params.validTo.toISOString()
+    ]
+  );
+  return result.rowCount ? result.rows[0] : null;
+}
+
+export async function maybeRotateRollingToken(client: PoolClient, currentToken: RollingTokenRow, clientTimestamp: Date) {
+  const currentValidTo = new Date(currentToken.valid_to);
+  const remainingMs = currentValidTo.getTime() - clientTimestamp.getTime();
+
+  if (remainingMs > ROLLING_TOKEN_ROTATION_LEAD_MS) {
+    return null;
+  }
+
+  const nextSequenceNumber = currentToken.sequence_number + 1;
+  const existing = await loadRollingTokenBySequence(client, currentToken.session_id, nextSequenceNumber);
+  if (existing) {
+    return existing;
+  }
+
+  const nextValidFrom = new Date(currentValidTo);
+  const nextValidTo = new Date(nextValidFrom.getTime() + ROLLING_TOKEN_LIFETIME_MS);
+  const tokenHash = createHash('sha256')
+    .update(`${currentToken.session_id}:${nextSequenceNumber}:${nextValidFrom.toISOString()}:rotation`)
+    .digest('hex');
+
+  return persistRollingToken(client, {
+    sessionId: currentToken.session_id,
+    sequenceNumber: nextSequenceNumber,
+    tokenHash,
+    validFrom: nextValidFrom,
+    validTo: nextValidTo
+  });
+}
+
+async function ensureInitialRollingToken(client: PoolClient, sessionId: string, clientTimestamp: Date) {
+  const validFrom = new Date(clientTimestamp);
+  const validTo = new Date(validFrom.getTime() + 60_000);
+  const tokenHash = createHash('sha256').update(`${sessionId}:${validFrom.toISOString()}:initial`).digest('hex');
+
+  await client.query(
+    `INSERT INTO rolling_tokens (session_id, sequence_number, token_hash, valid_from, valid_to)
+     SELECT $1, 1, $2, $3, $4
+      WHERE NOT EXISTS (
+        SELECT 1 FROM rolling_tokens WHERE session_id = $1
+      )`,
+    [sessionId, tokenHash, validFrom.toISOString(), validTo.toISOString()]
+  );
+
+  return loadActiveRollingToken(client, sessionId, clientTimestamp);
 }
 
 async function loadLastAcceptedSequence(client: PoolClient, sessionId: string, studentId: string) {
@@ -572,7 +655,10 @@ export async function submitHeartbeat(studentId: string, input: HeartbeatInput):
       } satisfies HeartbeatOutcome;
     }
 
-    const rollingToken = await loadActiveRollingToken(client, sessionId, clientTimestamp);
+    let rollingToken = await loadActiveRollingToken(client, sessionId, clientTimestamp);
+    if (!rollingToken) {
+      rollingToken = await ensureInitialRollingToken(client, sessionId, clientTimestamp);
+    }
     if (!rollingToken) {
       await persistRejectedHeartbeat(client, {
         sessionId,
@@ -646,6 +732,8 @@ export async function submitHeartbeat(studentId: string, input: HeartbeatInput):
       classificationResult: classification.classificationResult,
       heartbeatTime: clientTimestamp.toISOString()
     });
+
+    await maybeRotateRollingToken(client, rollingToken, clientTimestamp);
 
     return {
       accepted: true,

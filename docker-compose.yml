@@ -19,7 +19,9 @@ services:
   backend:
     build: ./backend
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/attendance
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      ACCESS_EXPIRES: ${ACCESS_EXPIRES}
       PORT: 3000
     depends_on:
       postgres:

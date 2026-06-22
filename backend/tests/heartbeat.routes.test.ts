@@ -186,7 +186,7 @@ describe('heartbeat routes', () => {
     expect(res.body.error).toBe('SEQUENCE_OUT_OF_ORDER');
   });
 
-  it('rejects invalid rolling tokens', async () => {
+  it('seeds an initial rolling token and accepts the first heartbeat', async () => {
     const client = {
       query: jest.fn()
         .mockResolvedValueOnce({})
@@ -194,7 +194,10 @@ describe('heartbeat routes', () => {
         .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'attendance-1', session_id: 'session-1', student_id: 'student-1', confidence_score: 70, confidence_breakdown: { runningPresenceScore: 70, acceptedHeartbeats: 0, rejectedHeartbeats: 0 }, status: 'PRESENT' }] })
         .mockResolvedValueOnce({ rowCount: 1, rows: [{ device_fingerprint: 'device-1' }] })
         .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'rolling-1', session_id: 'session-1', sequence_number: 1, token_hash: 'seeded-hash', valid_from: '2026-06-16T10:00:30.000Z', valid_to: '2026-06-16T10:01:30.000Z' }] })
         .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'heartbeat-1', server_ts: '2026-06-16T10:00:30.000Z' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'attendance-1' }] })
         .mockResolvedValueOnce({}),
       release: jest.fn()
     };
@@ -214,8 +217,48 @@ describe('heartbeat routes', () => {
         timestamp: '2026-06-16T10:00:30.000Z'
       });
 
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe('ROLLING_TOKEN_INVALID');
+    expect(res.status).toBe(200);
+    expect(res.body.heartbeat).toBeDefined();
+    expect(res.body.classificationResult).toBe('INSIDE_CLASSROOM');
+    expect(res.body.confidenceScore).toBe(92);
+  });
+
+  it('accepts a heartbeat near token expiry', async () => {
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'session-1', classroom_id: 'class-1', status: 'ACTIVE' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'attendance-1', session_id: 'session-1', student_id: 'student-1', confidence_score: 70, confidence_breakdown: { runningPresenceScore: 70, acceptedHeartbeats: 0, rejectedHeartbeats: 0 }, status: 'PRESENT' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ device_fingerprint: 'device-1' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'rolling-1', session_id: 'session-1', sequence_number: 1, token_hash: 'hash-1', valid_from: '2026-06-16T10:00:00.000Z', valid_to: '2026-06-16T10:01:00.000Z' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ seq_no: 0 }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'heartbeat-1', server_ts: '2026-06-16T10:00:45.000Z' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'attendance-1' }] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'rolling-2', session_id: 'session-1', sequence_number: 2, token_hash: 'hash-2', valid_from: '2026-06-16T10:01:00.000Z', valid_to: '2026-06-16T10:02:00.000Z' }] })
+        .mockResolvedValueOnce({}),
+      release: jest.fn()
+    };
+
+    mockedPool.connect.mockResolvedValueOnce(client as any);
+    const { token } = await createStudentToken();
+    const app = makeApp();
+
+    const response = await request(app)
+      .post('/heartbeats')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sessionId: 'session-1',
+        wifiFingerprint: [],
+        sequenceNumber: 1,
+        deviceFingerprint: 'device-1',
+        timestamp: '2026-06-16T10:00:45.000Z'
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.heartbeat).toBeDefined();
+    expect(response.body.classificationResult).toBe('OUTSIDE_CLASSROOM');
+    expect(client.query).toHaveBeenCalled();
   });
 
   it('rejects students without an active device binding', async () => {

@@ -143,10 +143,17 @@ export async function createSession(input: SessionCreateInput) {
   const thresholds = validatePresenceThresholds(input);
 
   return runInTransaction(async (client) => {
-    const activeCheck = await client.query(
-      `SELECT id FROM sessions WHERE teacher_id = $1 AND classroom_id = $2 AND status = 'ACTIVE' LIMIT 1`,
-      [teacherId, classroomId]
-    );
+   const activeCheck = await client.query(
+  `
+  SELECT id
+  FROM sessions
+  WHERE teacher_id = $1
+    AND classroom_id = $2
+    AND LOWER(status) = 'active'
+  LIMIT 1
+  `,
+  [teacherId, classroomId]
+);
 
     if ((activeCheck.rowCount ?? 0) > 0) {
       const error = new Error('ACTIVE_SESSION_EXISTS');
@@ -180,11 +187,14 @@ export async function endSession(sessionId: string) {
 
   return runInTransaction(async (client) => {
     const result = await client.query(`SELECT * FROM sessions WHERE id = $1 FOR UPDATE`, [trimmedSessionId]);
-    if ((result.rowCount ?? 0) === 0 || result.rows[0].status !== 'ACTIVE') {
-      const error = new Error('SESSION_NOT_ACTIVE');
-      (error as any).statusCode = 404;
-      throw error;
-    }
+    if (
+  (result.rowCount ?? 0) === 0 ||
+  result.rows[0].status.toLowerCase() !== 'active'
+) {
+  const error = new Error('SESSION_NOT_ACTIVE');
+  (error as any).statusCode = 404;
+  throw error;
+}
 
     const updated = await client.query(
       `UPDATE sessions SET status = 'CLOSED', end_time = now() WHERE id = $1 RETURNING *`,
@@ -217,9 +227,16 @@ export async function getSession(sessionId: string) {
 
   return sessionRowToApi(result.rows[0] as SessionRecord);
 }
-
 export async function listActiveSessions() {
-  const result = await pool.query(`SELECT * FROM sessions WHERE status = 'ACTIVE' ORDER BY start_time DESC`);
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM sessions
+    WHERE LOWER(status) = 'active'
+    ORDER BY start_time DESC
+    `
+  );
+
   return result.rows.map((row) => sessionRowToApi(row as SessionRecord));
 }
 
@@ -236,11 +253,14 @@ export async function joinSession(input: SessionJoinInput) {
 
   return runInTransaction(async (client) => {
     const sessionResult = await client.query(`SELECT * FROM sessions WHERE id = $1 FOR UPDATE`, [sessionId]);
-    if ((sessionResult.rowCount ?? 0) === 0 || sessionResult.rows[0].status !== 'ACTIVE') {
-      const error = new Error('SESSION_NOT_FOUND_OR_ACTIVE');
-      (error as any).statusCode = 404;
-      throw error;
-    }
+    if (
+  (sessionResult.rowCount ?? 0) === 0 ||
+  sessionResult.rows[0].status.toLowerCase() !== 'active'
+) {
+  const error = new Error('SESSION_NOT_FOUND_OR_ACTIVE');
+  (error as any).statusCode = 404;
+  throw error;
+}
 
     const attendanceResult = await client.query(
       `SELECT id FROM attendance WHERE session_id = $1 AND student_id = $2 LIMIT 1`,
