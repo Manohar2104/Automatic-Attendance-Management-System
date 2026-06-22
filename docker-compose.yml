@@ -49,11 +49,12 @@ services:
       - "8000:8000"
     volumes:
       - ./server:/app
+    env_file:
+      - ./server/.env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/postgres}
       - REDIS_URL=redis://redis:6379/0
       - FIND3_WS_URL=ws://find3:8003/ws?family=smart_attendance&device=all
-      - JWT_SECRET=7Qhg9fn5jCmbyyfM33s2YaJ8vXDRa8+Wtw1p9ruFGXk=
       - HOST=0.0.0.0
       - PORT=8000
     depends_on:
