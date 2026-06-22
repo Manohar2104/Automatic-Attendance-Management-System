@@ -32,7 +32,15 @@ class WiFiScanService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, createNotification())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                createNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, createNotification())
+        }
         startScanning()
         return START_STICKY
     }
@@ -47,8 +55,16 @@ class WiFiScanService : Service() {
     }
 
     private suspend fun performScan() {
-        wifiManager?.let { wm ->
-            try {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        val wakeLock = powerManager?.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
+            "SmartAttendance::WiFiScanWakeLock"
+        )
+        try {
+            // Acquire wake lock with a 5s timeout to avoid any chance of leaking the lock
+            wakeLock?.acquire(5000)
+            
+            wifiManager?.let { wm ->
                 val success = wm.startScan()
                 if (success) {
                     val scanResults = wm.scanResults
@@ -57,8 +73,12 @@ class WiFiScanService : Service() {
 
                     onScanResult(bssids, strongest?.level ?: 0)
                 }
-            } catch (e: Exception) {
-                // Scan failed, will retry on next interval
+            }
+        } catch (e: Exception) {
+            // Scan failed, will retry on next interval
+        } finally {
+            if (wakeLock?.isHeld == true) {
+                wakeLock.release()
             }
         }
     }
