@@ -33,8 +33,8 @@
 | Registration Screen | ✅ | Email/password validation, device binding |
 | Main Screen | ✅ | Connection status, last sync time, Material Icons |
 | Health Check | ✅ | HTTP `/health` endpoint (replaced ICMP ping) |
-| WiFiScanService | ✅ | Foreground service, 30s scan interval, error handling |
-| PresenceWorker | ✅ | WorkManager periodic (15min), updates `lastSyncTime` |
+| WiFiScanService | ✅ | Foreground service (location-type compliant), sticky startup, periodic CPU WakeLock acquisition, error handling |
+| PresenceWorker | ✅ | WorkManager periodic (15min) presence sync with network constraints and exponential backoff retry criteria |
 | PreferencesManager | ✅ | DataStore persistence with `lastSyncTime` tracking |
 | DeviceManager | ✅ | SHA-256 of ANDROID_ID |
 | AttendanceApi | ✅ | Retrofit client, all DTOs, health endpoint |
@@ -74,13 +74,6 @@
 - [ ] Run find3 fingerprinting for each classroom
 - [ ] Load test: 50 concurrent devices, 10 sessions/day
 - [ ] Monitor: WiFiScanService persistence, PresenceWorker Doze mode behavior
-
-### 7. Background Worker Reliability (Medium)
-Android-specific hardening:
-- WiFiScanService: START_STICKY, ForegroundServiceType.DATA_SYNC, WakeLock per scan
-- PresenceWorker: Exponential backoff, network constraints
-- Test: force-stop app → worker still runs
-- Test: Doze mode (`adb shell dumpsys deviceidle force-idle`)
 
 ---
 
