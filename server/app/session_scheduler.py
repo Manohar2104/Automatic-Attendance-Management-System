@@ -7,9 +7,8 @@ Runs periodically to:
 
 import logging
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Session, SessionStatus, Event, User, RoleEnum, EventType
@@ -40,7 +39,7 @@ async def check_and_process_sessions(session: AsyncSession = None) -> None:
 async def _auto_start_sessions(session: AsyncSession) -> None:
     """Auto-start sessions when scheduled time arrives and faculty is present."""
     now = datetime.now(timezone.utc)
-    
+
     # Find sessions that should be starting (SCHEDULED status, within time window)
     stmt = select(Session).where(
         and_(
@@ -51,11 +50,13 @@ async def _auto_start_sessions(session: AsyncSession) -> None:
     )
     result = await session.execute(stmt)
     sessions_to_start = result.scalars().all()
-    
+
     for sess in sessions_to_start:
         # Check if any faculty member is present in this location
-        is_faculty_present = await _is_faculty_present_in_location(session, sess.location)
-        
+        is_faculty_present = await _is_faculty_present_in_location(
+            session, sess.location
+        )
+
         if is_faculty_present:
             logger.info(f"Auto-starting session {sess.id} (location: {sess.location})")
             sess.status = SessionStatus.ACTIVE
@@ -65,7 +66,7 @@ async def _auto_start_sessions(session: AsyncSession) -> None:
 async def _auto_end_sessions(session: AsyncSession) -> None:
     """Auto-end active sessions when scheduled end time passes."""
     now = datetime.now(timezone.utc)
-    
+
     # Find active sessions past their scheduled end time
     stmt = select(Session).where(
         and_(
@@ -75,7 +76,7 @@ async def _auto_end_sessions(session: AsyncSession) -> None:
     )
     result = await session.execute(stmt)
     sessions_to_end = result.scalars().all()
-    
+
     for sess in sessions_to_end:
         logger.info(f"Auto-ending session {sess.id}")
         sess.status = SessionStatus.COMPLETED
@@ -90,18 +91,18 @@ async def _is_faculty_present_in_location(
     Looks at events from the past N minutes.
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
-    
+
     # Find faculty users
     stmt = select(User).where(User.role == RoleEnum.FACULTY)
     result = await session.execute(stmt)
     faculty_users = result.scalars().all()
-    
+
     if not faculty_users:
         logger.debug(f"No faculty members found for location {location}")
         return False
-    
+
     faculty_ids = [f.id for f in faculty_users]
-    
+
     # Check for recent events from faculty in this location
     stmt = select(Event).where(
         and_(
@@ -113,11 +114,11 @@ async def _is_faculty_present_in_location(
     )
     result = await session.execute(stmt)
     events = result.scalars().all()
-    
+
     faculty_present = len(events) > 0
     logger.debug(
         f"Faculty present in {location}: {faculty_present} "
         f"({len(events)} recent ENTER events)"
     )
-    
+
     return faculty_present

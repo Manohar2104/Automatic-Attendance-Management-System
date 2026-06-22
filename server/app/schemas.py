@@ -42,7 +42,7 @@ class TimetableEntry(BaseModel):
     room_id: str
     location: str
     scheduled_start: str  # ISO format
-    scheduled_end: str    # ISO format
+    scheduled_end: str  # ISO format
 
 
 class SessionInfo(BaseModel):

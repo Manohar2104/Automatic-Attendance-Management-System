@@ -1,4 +1,4 @@
-from sqlalchemy import String, Column, DateTime, Enum, Float, ForeignKey, Boolean, UUID
+from sqlalchemy import String, Column, DateTime, Enum, Float, ForeignKey, UUID
 from sqlalchemy.sql import func
 import enum
 import uuid
@@ -35,7 +35,9 @@ class DeviceBinding(Base):
     __tablename__ = "device_bindings"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # user_id may be null until a device is bound to a user
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     device_fingerprint = Column(String(255), nullable=False, unique=True, index=True)
     status = Column(Enum(BindingStatus), default=BindingStatus.ACTIVE, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -70,7 +72,9 @@ class Session(Base):
     scheduled_end = Column(DateTime(timezone=True), nullable=False)
     actual_start = Column(DateTime(timezone=True), nullable=True)
     actual_end = Column(DateTime(timezone=True), nullable=True)
-    status = Column(Enum(SessionStatus), default=SessionStatus.SCHEDULED, nullable=False)
+    status = Column(
+        Enum(SessionStatus), default=SessionStatus.SCHEDULED, nullable=False
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -93,7 +97,9 @@ class Event(Base):
 class AttendanceOverride(Base):
     __tablename__ = "attendance_overrides"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    attendance_id = Column(UUID(as_uuid=True), ForeignKey("attendances.id"), nullable=False)
+    attendance_id = Column(
+        UUID(as_uuid=True), ForeignKey("attendances.id"), nullable=False
+    )
     admin_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     original_status = Column(Enum(AttendanceStatus), nullable=False)
     override_status = Column(Enum(AttendanceStatus), nullable=False)

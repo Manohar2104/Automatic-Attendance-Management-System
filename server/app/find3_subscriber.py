@@ -46,40 +46,48 @@ class Find3Subscriber:
                         except Exception:
                             continue
                         await self._handle_find3_message(data)
-            except Exception as e:
-                log.exception('find3 subscriber error, reconnecting in 5s')
+            except Exception:
+                log.exception("find3 subscriber error, reconnecting in 5s")
                 await asyncio.sleep(5)
 
     async def _handle_find3_message(self, data: dict):
         """Parse real find3 WebSocket payload and persist events."""
-        sensors = data.get('sensors', {})
-        guesses = data.get('guesses', [])
+        sensors = data.get("sensors", {})
+        guesses = data.get("guesses", [])
 
         if not sensors:
             log.debug("No sensors field in find3 message")
             return
 
-        device_fingerprint = sensors.get('d') or sensors.get('device')
-        family = sensors.get('f')
-        timestamp_ms = sensors.get('t')
-        location = sensors.get('l') or (guesses[0].get('location') if guesses else None)
+        device_fingerprint = sensors.get("d") or sensors.get("device")
+        family = sensors.get("f")
+        timestamp_ms = sensors.get("t")
+        location = sensors.get("l") or (guesses[0].get("location") if guesses else None)
 
         if not device_fingerprint or not family:
             log.debug("Missing device or family in find3 message")
             return
 
         full_fingerprint = f"{family}:{device_fingerprint}"
-        event_type = 'ENTER'
+        event_type = "ENTER"
 
-        await self._persist_event(full_fingerprint, None, location, event_type, timestamp_ms)
+        await self._persist_event(
+            full_fingerprint, None, location, event_type, timestamp_ms
+        )
 
-    async def _persist_event(self, device_fingerprint, session_id, location, event_type, timestamp_ms=None):
+    async def _persist_event(
+        self, device_fingerprint, session_id, location, event_type, timestamp_ms=None
+    ):
         if not device_fingerprint:
             return
         SessionLocal = get_sessionmaker()
         async with SessionLocal() as db:
             try:
-                q = await db.execute(DeviceBinding.__table__.select().where(DeviceBinding.device_fingerprint == device_fingerprint))
+                q = await db.execute(
+                    DeviceBinding.__table__.select().where(
+                        DeviceBinding.device_fingerprint == device_fingerprint
+                    )
+                )
                 row = q.first()
                 user_id = row.user_id if row else None
 
@@ -89,7 +97,7 @@ class Find3Subscriber:
                         select(DbSession).where(
                             and_(
                                 DbSession.location == location,
-                                DbSession.status == SessionStatus.ACTIVE
+                                DbSession.status == SessionStatus.ACTIVE,
                             )
                         )
                     )
@@ -97,19 +105,29 @@ class Find3Subscriber:
                     if active_sess:
                         session_id = str(active_sess.id)
 
-                ts = datetime.datetime.fromtimestamp(timestamp_ms / 1000, tz=datetime.timezone.utc) if timestamp_ms else datetime.datetime.now(datetime.timezone.utc)
+                ts = (
+                    datetime.datetime.fromtimestamp(
+                        timestamp_ms / 1000, tz=datetime.timezone.utc
+                    )
+                    if timestamp_ms
+                    else datetime.datetime.now(datetime.timezone.utc)
+                )
 
                 ev = Event(
                     user_id=user_id,
                     session_id=session_id,
-                    type=EventType.ENTER if event_type == 'ENTER' else EventType.LEAVE,
+                    type=EventType.ENTER if event_type == "ENTER" else EventType.LEAVE,
                     location=location,
-                    timestamp=ts
+                    timestamp=ts,
                 )
                 db.add(ev)
 
                 if row:
-                    await db.execute(DeviceBinding.__table__.update().where(DeviceBinding.device_fingerprint == device_fingerprint).values(last_seen_at=ts, status='ACTIVE'))
+                    await db.execute(
+                        DeviceBinding.__table__.update()
+                        .where(DeviceBinding.device_fingerprint == device_fingerprint)
+                        .values(last_seen_at=ts, status="ACTIVE")
+                    )
                 await db.commit()
             except Exception as e:
                 log.warning("skipping persist_event due to DB error: %s", e)
@@ -135,18 +153,21 @@ class Find3Subscriber:
 
 subscriber: Optional[Find3Subscriber] = None
 
+
 def init_subscriber(app):
     global subscriber
-    ws = getattr(settings, 'find3_ws_url', None)
+    ws = getattr(settings, "find3_ws_url", None)
     if not ws:
         return
     subscriber = Find3Subscriber(ws)
     app.state.find3_subscriber = subscriber
 
+
 async def start_subscriber(app):
-    if getattr(app.state, 'find3_subscriber', None):
+    if getattr(app.state, "find3_subscriber", None):
         await app.state.find3_subscriber.start()
 
+
 async def stop_subscriber(app):
-    if getattr(app.state, 'find3_subscriber', None):
+    if getattr(app.state, "find3_subscriber", None):
         await app.state.find3_subscriber.stop()

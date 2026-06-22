@@ -1,0 +1,24 @@
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "C90"]
+ignore = ["E402", "E501"] # Allow E402 (imports sequence) and E501 (line length, managed by Black)
+
+[tool.mypy]
+ignore_missing_imports = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+disable_error_code = [
+    "attr-defined",
+    "assignment",
+    "arg-type",
+    "var-annotated",
+    "return-value",
+    "union-attr"
+]
