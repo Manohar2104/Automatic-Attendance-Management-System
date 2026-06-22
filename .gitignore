@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+server/.venv/
+
+# Databases & local files
+*.db
+*.log
+server/test.db
+server/dev.db
+server/test_result.txt
+test_migrate.db
+
+# Android
+.gradle/
+local.properties
+.idea/
+*.apk
+*.ap_
+*.dex
+*.class
+android/app/build/
+android/.gradle/
+build/
+capture.png
+
+# Docker
+.docker/
+
+# Internal source
+find3-source/

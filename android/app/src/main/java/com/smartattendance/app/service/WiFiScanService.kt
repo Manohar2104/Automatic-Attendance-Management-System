@@ -1,12 +1,14 @@
 package com.smartattendance.app.service
 
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.smartattendance.app.MainActivity
@@ -19,8 +21,15 @@ class WiFiScanService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var scanJob: Job? = null
+    private var wifiManager: WifiManager? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        createNotificationChannel()
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, createNotification())
@@ -38,14 +47,19 @@ class WiFiScanService : Service() {
     }
 
     private suspend fun performScan() {
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-        val success = wifiManager.startScan()
-        if (success) {
-            val scanResults = wifiManager.scanResults
-            val strongest = scanResults.maxByOrNull { it.level }
-            val bssids = scanResults.take(5).map { "${it.SSID}(${it.level}dBm)" }
+        wifiManager?.let { wm ->
+            try {
+                val success = wm.startScan()
+                if (success) {
+                    val scanResults = wm.scanResults
+                    val strongest = scanResults.maxByOrNull { it.level }
+                    val bssids = scanResults.take(5).map { "${it.SSID}(${it.level}dBm)" }
 
-            onScanResult(bssids, strongest?.level ?: 0)
+                    onScanResult(bssids, strongest?.level ?: 0)
+                }
+            } catch (e: Exception) {
+                // Scan failed, will retry on next interval
+            }
         }
     }
 
@@ -68,7 +82,7 @@ class WiFiScanService : Service() {
         val openIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, openIntent,
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         return NotificationCompat.Builder(this, SmartAttendanceApp.NOTIFICATION_CHANNEL_ID)
@@ -78,6 +92,20 @@ class WiFiScanService : Service() {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                SmartAttendanceApp.NOTIFICATION_CHANNEL_ID,
+                "WiFi Scanning",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Shows when attendance scanning is active"
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
     }
 
     companion object {

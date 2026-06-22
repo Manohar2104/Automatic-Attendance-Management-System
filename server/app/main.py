@@ -1,11 +1,11 @@
-from fastapi import FastAPI, Depends, HTTPException, Body
+from fastapi import FastAPI, Depends, HTTPException, Body, Header
 from typing import List
 from contextlib import asynccontextmanager
 from .schemas import HealthCheck, UserCreate, Token
 from .db import Base, get_db
 from .config import settings
 from .models import User
-from .auth import get_password_hash, verify_password, create_access_token
+from .auth import get_password_hash, verify_password, create_access_token, create_refresh_token
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import asyncio
@@ -14,12 +14,37 @@ from .schemas import DeviceRegister, PresenceEvent, DeviceInfo
 from .models import DeviceBinding, Event, EventType, Attendance, AttendanceStatus, AttendanceOverride
 from sqlalchemy import insert
 import uuid
+import time
 from .auth import require_current_user, get_current_user
 from sqlalchemy.exc import IntegrityError
 from .config import settings
+import logging
+from .logging_config import setup_logging, request_id_var, user_id_var, session_id_var, endpoint_var
+
+# Initialize structured logging configuration immediately on app startup
+setup_logging()
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 # initialize find3 subscriber if configured
 from .find3_subscriber import init_subscriber, start_subscriber, stop_subscriber
+from .session_scheduler import check_and_process_sessions
+from .rate_limit import get_redis, close_redis, is_rate_limited, blacklist_token, is_token_blacklisted
+
+logger = logging.getLogger(__name__)
+
+
+
+async def session_scheduler_task():
+    """Background task that periodically processes session state transitions."""
+    while True:
+        try:
+            await check_and_process_sessions()
+        except Exception as e:
+            logger.error(f"Error in session scheduler: {e}", exc_info=True)
+        await asyncio.sleep(60)  # Run every minute
 
 
 @asynccontextmanager
@@ -31,12 +56,105 @@ async def lifespan(app):
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await start_subscriber(app)
+    
+    # Initialize Redis
+    try:
+        await get_redis()
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis: {e}")
+        logger.warning("Continuing without Redis - rate limiting disabled")
+    
+    # Start session scheduler background task
+    scheduler_task = asyncio.create_task(session_scheduler_task())
+    app.session_scheduler_task = scheduler_task
+    
     yield
+    
     # shutdown
     await stop_subscriber(app)
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
+    
+    # Close Redis
+    await close_redis()
 
 
 app = FastAPI(title="Smart Attendance Registry", lifespan=lifespan)
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Middleware to apply rate limiting based on endpoint."""
+    
+    async def dispatch(self, request: Request, call_next) -> Response:
+        # Get client IP
+        client_ip = request.client.host if request.client else "unknown"
+        
+        # Determine rate limit based on path
+        path = request.url.path
+        
+        if path == "/presence":
+            requests_per_minute = 300  # 5 per second
+        elif path in ["/register", "/login"]:
+            requests_per_minute = 60   # 1 per second
+        else:
+            requests_per_minute = 100  # ~1.67 per second
+        
+        # Check rate limit
+        if await is_rate_limited(client_ip, path, requests_per_minute):
+            return Response(
+                content='{"detail":"Rate limit exceeded"}',
+                status_code=429,
+                media_type="application/json"
+            )
+        
+        response = await call_next(request)
+        return response
+
+
+class StructuredLoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to inject context variables and log request lifecycle in JSON."""
+    
+    async def dispatch(self, request: Request, call_next) -> Response:
+        req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        token_request_id = request_id_var.set(req_id)
+        token_endpoint = endpoint_var.set(request.url.path)
+        
+        # Reset user and session context
+        token_user = user_id_var.set("")
+        token_session = session_id_var.set("")
+        
+        start_time = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        except Exception as e:
+            logger.exception("Exception occurred during request processing")
+            raise e
+        finally:
+            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            client_ip = request.client.host if request.client else "unknown"
+            
+            logger.info(
+                f"Request {request.method} {request.url.path} finished with status {status_code}",
+                extra={
+                    "latency_ms": latency_ms,
+                    "status_code": status_code,
+                    "client_ip": client_ip,
+                    "method": request.method,
+                }
+            )
+
+
+# Apply rate limiting middleware
+app.add_middleware(RateLimitMiddleware)
+
+# Apply structured logging middleware (runs outermost to capture rate limit blocks too)
+app.add_middleware(StructuredLoggingMiddleware)
 
 
 @app.get("/health", response_model=HealthCheck)
@@ -56,8 +174,11 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    token = create_access_token(str(user.id))
-    return Token(access_token=token)
+    user_id_var.set(str(user.id))
+    logger.info(f"User registered successfully: {payload.email}", extra={"user_email": payload.email, "user_id": str(user.id)})
+    access_token = create_access_token(str(user.id))
+    refresh_token = create_refresh_token(str(user.id))
+    return Token(access_token=access_token, refresh_token=refresh_token)
 
 
 @app.post("/login", response_model=Token)
@@ -68,8 +189,64 @@ async def login(payload: UserCreate, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token(str(user.id))
-    return Token(access_token=token)
+    user_id_var.set(str(user.id))
+    logger.info(f"User logged in successfully: {payload.email}", extra={"user_email": payload.email, "user_id": str(user.id)})
+    access_token = create_access_token(str(user.id))
+    refresh_token = create_refresh_token(str(user.id))
+    return Token(access_token=access_token, refresh_token=refresh_token)
+
+
+@app.post("/refresh", response_model=Token)
+async def refresh(authorization: str = Header(None), db: AsyncSession = Depends(get_db)):
+    """Refresh access token using a refresh token."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid auth header")
+    token = authorization[7:]
+    
+    try:
+        from .auth import settings as auth_settings
+        from jose import jwt
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        user_id = payload.get("sub")
+        token_type = payload.get("type")
+        
+        if token_type != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type. Use refresh token")
+        
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+        
+        # Verify user exists
+        user_id = uuid.UUID(user_id)
+        q = await db.execute(select(User).where(User.id == user_id))
+        user = q.scalars().first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Generate new access and refresh tokens
+        new_access_token = create_access_token(str(user.id))
+        new_refresh_token = create_refresh_token(str(user.id))
+        return Token(access_token=new_access_token, refresh_token=new_refresh_token)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expired. Please login again")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+
+@app.post("/logout")
+async def logout(authorization: str = Header(None), current_user=Depends(require_current_user)):
+    """Logout and blacklist the access token."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid auth header")
+    token = authorization[7:]
+    
+    # Blacklist the token
+    await blacklist_token(token, ttl_seconds=900)  # 15 minutes
+    return {"message": "Logged out successfully"}
 
 
 @app.post('/register-device')
@@ -126,6 +303,17 @@ async def revoke_device(device_id: str, db: AsyncSession = Depends(get_db), curr
     binding.revoked_at = datetime.datetime.now(datetime.timezone.utc)
     binding.revoked_by = current_user.id
     await db.commit()
+    
+    logger.info(
+        f"AUDIT: Device {device_id} revoked by user {current_user.id}",
+        extra={
+            "event_type": "audit_device_revocation",
+            "device_id": device_id,
+            "revoked_by": str(current_user.id),
+            "owner_id": str(binding.user_id) if binding.user_id else ""
+        }
+    )
+    
     return {"status": "revoked"}
 
 
@@ -172,6 +360,7 @@ async def compute_attendance(session_id: str, location_filter: str = None, db: A
         user_events.setdefault(e.user_id, []).append(e)
 
     # Determine session window from events
+    session_id_var.set(session_id)
     if events:
         timestamps = [e.timestamp for e in events if e.timestamp is not None]
         start = min(timestamps)
@@ -209,6 +398,18 @@ async def compute_attendance(session_id: str, location_filter: str = None, db: A
     location_validated = location_filter is not None
 
     await db.commit()
+    
+    logger.info(
+        f"AUDIT: Computed attendance for session {session_id} (location_filter={location_filter}). Found {bound_count} bound devices.",
+        extra={
+            "event_type": "audit_compute_attendance",
+            "session_id": session_id,
+            "location_filter": location_filter,
+            "bound_devices_count": bound_count,
+            "crowd_ok": crowd_ok
+        }
+    )
+    
     return ComputeAttendanceResponse(
         session_id=session_id,
         duration_seconds=duration_seconds,
@@ -327,6 +528,74 @@ async def list_sessions(db: AsyncSession = Depends(get_db), current_user=Depends
     ]
 
 
+@app.post('/admin/promote')
+async def promote_to_admin(
+    user_id: str = Body(..., embed=True),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    """Promote a user to ADMIN role. Only existing admins can do this."""
+    if current_user.role != 'ADMIN':
+        raise HTTPException(status_code=403, detail="Only admins can promote users")
+    
+    q = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = q.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.role = 'ADMIN'
+    await db.commit()
+    await db.refresh(user)
+    
+    return {
+        "user_id": str(user.id),
+        "email": user.email,
+        "role": user.role
+    }
+
+
+@app.post('/admin/setup', response_model=Token)
+async def admin_setup(
+    payload: UserCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Setup the first admin user. Only works if no admin users exist yet.
+    This endpoint allows initialization without requiring an existing admin.
+    """
+    # Check if any admin exists
+    q = await db.execute(select(User).where(User.role == 'ADMIN'))
+    admin_exists = q.scalars().first() is not None
+    
+    if admin_exists:
+        raise HTTPException(status_code=403, detail="Admin already exists. Use /admin/promote instead")
+    
+    # Check if user already exists
+    q = await db.execute(select(User).where(User.email == payload.email))
+    existing = q.scalars().first()
+    if existing:
+        # Promote existing user to admin
+        existing.role = 'ADMIN'
+        await db.commit()
+        await db.refresh(existing)
+        access_token = create_access_token(str(existing.id))
+        refresh_token = create_refresh_token(str(existing.id))
+        return Token(access_token=access_token, refresh_token=refresh_token)
+    
+    # Create new admin user
+    user = User(
+        email=payload.email,
+        password_hash=get_password_hash(payload.password),
+        role='ADMIN'
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    access_token = create_access_token(str(user.id))
+    refresh_token = create_refresh_token(str(user.id))
+    return Token(access_token=access_token, refresh_token=refresh_token)
+
+
 @app.post('/sessions/{session_id}/override-attendance')
 async def override_attendance(
     session_id: str,
@@ -341,13 +610,20 @@ async def override_attendance(
         raise HTTPException(status_code=403, detail="Only admins can override attendance")
     
     # Find existing attendance record
+    from uuid import UUID as UUID_type
+    try:
+        student_uuid = UUID_type(student_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid student ID format")
+
     q = await db.execute(
         select(Attendance).where(
             (Attendance.session_id == session_id) &
-            (Attendance.student_id == student_id)
+            (Attendance.student_id == student_uuid)
         )
     )
     attendance = q.scalars().first()
+    session_id_var.set(session_id)
     if not attendance:
         raise HTTPException(status_code=404, detail="Attendance record not found")
     
@@ -365,6 +641,19 @@ async def override_attendance(
     # Update attendance status
     attendance.status = AttendanceStatus[override_status]
     await db.commit()
+    
+    logger.info(
+        f"AUDIT: Admin {current_user.id} overridden student {student_id} attendance in session {session_id} to {override_status}. Justification: {justification}",
+        extra={
+            "event_type": "audit_override_attendance",
+            "admin_id": str(current_user.id),
+            "student_id": student_id,
+            "session_id": session_id,
+            "original_status": override.original_status.value,
+            "new_status": override_status,
+            "justification": justification
+        }
+    )
     
     return {
         "attendance_id": str(attendance.id),

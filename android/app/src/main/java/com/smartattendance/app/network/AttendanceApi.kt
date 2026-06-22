@@ -51,7 +51,14 @@ data class SessionInfo(
     val scheduled_end: String
 )
 
+data class HealthResponse(
+    val status: String
+)
+
 interface AttendanceApi {
+
+    @GET("health")
+    suspend fun getHealth(): HealthResponse
 
     @POST("register")
     suspend fun register(@Body request: RegisterRequest): TokenResponse

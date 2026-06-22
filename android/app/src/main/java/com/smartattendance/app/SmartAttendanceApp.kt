@@ -4,11 +4,26 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.util.Log
+import java.io.PrintWriter
+import java.io.StringWriter
 
 class SmartAttendanceApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        installCrashHandler()
+    }
+
+    private fun installCrashHandler() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val sw = StringWriter()
+            val pw = PrintWriter(sw)
+            throwable.printStackTrace(pw)
+            Log.e(TAG, "CRASH: ${throwable.message}\n${sw}")
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
     }
 
     private fun createNotificationChannel() {
@@ -27,5 +42,6 @@ class SmartAttendanceApp : Application() {
 
     companion object {
         const val NOTIFICATION_CHANNEL_ID = "wifi_scan"
+        private const val TAG = "SmartAttendance"
     }
 }

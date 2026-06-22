@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     min_crowd_size: int = 3
     # optional find3 websocket URL (ws:// or wss://)
     find3_ws_url: str = ""
+    # Redis configuration
+    redis_url: str = "redis://localhost:6379/0"
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -19,8 +20,10 @@ class PreferencesManager(private val context: Context) {
         val DEVICE_ID = stringPreferencesKey("device_id")
         val IS_REGISTERED = booleanPreferencesKey("is_registered")
         val SESSION_ID = stringPreferencesKey("session_id")
+        val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
+        val IS_SCANNING = booleanPreferencesKey("is_scanning")
 
-        const val DEFAULT_SERVER_URL = "http://10.0.2.2:8100"
+        const val DEFAULT_SERVER_URL = "http://10.215.4.159:8000"
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -39,6 +42,14 @@ class PreferencesManager(private val context: Context) {
         prefs[SESSION_ID] ?: ""
     }
 
+    val lastSyncTime: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[LAST_SYNC_TIME] ?: 0L
+    }
+
+    val isScanning: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[IS_SCANNING] ?: false
+    }
+
     suspend fun saveServerUrl(url: String) {
         context.dataStore.edit { it[SERVER_URL] = url }
     }
@@ -53,5 +64,13 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun saveSessionId(sessionId: String) {
         context.dataStore.edit { it[SESSION_ID] = sessionId }
+    }
+
+    suspend fun updateLastSyncTime() {
+        context.dataStore.edit { it[LAST_SYNC_TIME] = System.currentTimeMillis() }
+    }
+
+    suspend fun setScanning(scanning: Boolean) {
+        context.dataStore.edit { it[IS_SCANNING] = scanning }
     }
 }

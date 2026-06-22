@@ -6,8 +6,9 @@ import websockets
 
 from .config import settings
 from .db import get_sessionmaker
-from .models import Event, EventType, DeviceBinding
+from .models import Event, EventType, DeviceBinding, Session as DbSession, SessionStatus
 import datetime
+from sqlalchemy import select, and_
 
 log = logging.getLogger("find3_subscriber")
 
@@ -23,7 +24,6 @@ class Find3Subscriber:
             log.info("find3 ws url not configured; subscriber disabled")
             return
         log.info("starting find3 subscriber")
-        # wait for DB readiness (tables created) before running subscriber loop
         try:
             await self._wait_for_db_ready()
         except Exception:
@@ -45,36 +45,73 @@ class Find3Subscriber:
                             data = json.loads(msg)
                         except Exception:
                             continue
-                        # Expect a JSON with fields: deviceFingerprint, sessionId, location, eventType
-                        df = data.get('deviceFingerprint') or data.get('device_id')
-                        session_id = data.get('sessionId') or data.get('session_id')
-                        location = data.get('location')
-                        event_type = data.get('eventType') or data.get('event_type') or 'ENTER'
-                        # persist to DB
-                        await self._persist_event(df, session_id, location, event_type)
+                        await self._handle_find3_message(data)
             except Exception as e:
                 log.exception('find3 subscriber error, reconnecting in 5s')
                 await asyncio.sleep(5)
 
-    async def _persist_event(self, device_fingerprint, session_id, location, event_type):
+    async def _handle_find3_message(self, data: dict):
+        """Parse real find3 WebSocket payload and persist events."""
+        sensors = data.get('sensors', {})
+        guesses = data.get('guesses', [])
+
+        if not sensors:
+            log.debug("No sensors field in find3 message")
+            return
+
+        device_fingerprint = sensors.get('d') or sensors.get('device')
+        family = sensors.get('f')
+        timestamp_ms = sensors.get('t')
+        location = sensors.get('l') or (guesses[0].get('location') if guesses else None)
+
+        if not device_fingerprint or not family:
+            log.debug("Missing device or family in find3 message")
+            return
+
+        full_fingerprint = f"{family}:{device_fingerprint}"
+        event_type = 'ENTER'
+
+        await self._persist_event(full_fingerprint, None, location, event_type, timestamp_ms)
+
+    async def _persist_event(self, device_fingerprint, session_id, location, event_type, timestamp_ms=None):
         if not device_fingerprint:
             return
         SessionLocal = get_sessionmaker()
-        # DB operations may fail if the app is still starting and tables are not created yet.
-        # Catch and log DB errors and skip processing so the subscriber keeps running.
         async with SessionLocal() as db:
             try:
                 q = await db.execute(DeviceBinding.__table__.select().where(DeviceBinding.device_fingerprint == device_fingerprint))
                 row = q.first()
                 user_id = row.user_id if row else None
-                ev = Event(user_id=user_id, session_id=session_id, type=EventType.ENTER if event_type == 'ENTER' else EventType.LEAVE, location=location, timestamp=datetime.datetime.now(datetime.timezone.utc))
+
+                # Resolve session_id from active sessions at this location if not provided
+                if not session_id and location:
+                    sess_q = await db.execute(
+                        select(DbSession).where(
+                            and_(
+                                DbSession.location == location,
+                                DbSession.status == SessionStatus.ACTIVE
+                            )
+                        )
+                    )
+                    active_sess = sess_q.scalars().first()
+                    if active_sess:
+                        session_id = str(active_sess.id)
+
+                ts = datetime.datetime.fromtimestamp(timestamp_ms / 1000, tz=datetime.timezone.utc) if timestamp_ms else datetime.datetime.now(datetime.timezone.utc)
+
+                ev = Event(
+                    user_id=user_id,
+                    session_id=session_id,
+                    type=EventType.ENTER if event_type == 'ENTER' else EventType.LEAVE,
+                    location=location,
+                    timestamp=ts
+                )
                 db.add(ev)
+
                 if row:
-                    # update last seen
-                    await db.execute(DeviceBinding.__table__.update().where(DeviceBinding.device_fingerprint == device_fingerprint).values(last_seen_at=datetime.datetime.now(datetime.timezone.utc), status='ACTIVE'))
+                    await db.execute(DeviceBinding.__table__.update().where(DeviceBinding.device_fingerprint == device_fingerprint).values(last_seen_at=ts, status='ACTIVE'))
                 await db.commit()
             except Exception as e:
-                # likely the tables aren't ready yet or transient DB error; log and skip
                 log.warning("skipping persist_event due to DB error: %s", e)
                 try:
                     await db.rollback()
@@ -83,13 +120,11 @@ class Find3Subscriber:
                 return
 
     async def _wait_for_db_ready(self, timeout: int = 10):
-        """Wait until the device_bindings table is queryable, up to timeout seconds."""
         SessionLocal = get_sessionmaker()
         start = asyncio.get_event_loop().time()
         while True:
             try:
                 async with SessionLocal() as db:
-                    # try a minimal query against device_bindings; works for sqlite and pg
                     await db.execute(DeviceBinding.__table__.select().limit(1))
                     return
             except Exception:

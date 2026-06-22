@@ -304,3 +304,154 @@ class TestAttendance:
         assert response.status_code == 200
         data = response.json()
         assert "location_validated" in data
+
+
+class TestAdminProvisioning:
+    @pytest.mark.asyncio
+    async def test_setup_first_admin(self, test_db, client):
+        """Test setup of first admin user."""
+        response = await client.post(
+            "/admin/setup",
+            json={"email": "admin@test.com", "password": "password123"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["email"] == "admin@test.com"
+
+
+class TestAdminProvisioning:
+    """Test admin setup and promotion."""
+    
+    @pytest.mark.asyncio
+    async def test_setup_first_admin(self, client):
+        """Test setup of first admin user."""
+        response = await client.post(
+            "/admin/setup",
+            json={"email": "admin@test.com", "password": "password123"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token" in data
+        assert data["token_type"] == "bearer"
+
+    @pytest.mark.asyncio
+    async def test_setup_existing_user_as_admin(self, client):
+        """Test that existing user can be promoted to admin via setup."""
+        # First create a regular user
+        await client.post(
+            "/register",
+            json={"email": "user@test.com", "password": "password"}
+        )
+        
+        # Then use setup to promote them to admin (if no admin exists yet)
+        response = await client.post(
+            "/admin/setup",
+            json={"email": "user@test.com", "password": "newpass"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token" in data
+
+    @pytest.mark.asyncio
+    async def test_setup_admin_fails_if_admin_exists(self, client):
+        """Test that setup fails when admin already exists."""
+        # Create first admin
+        await client.post(
+            "/admin/setup",
+            json={"email": "admin@test.com", "password": "password123"}
+        )
+        
+        # Try to create another admin
+        response = await client.post(
+            "/admin/setup",
+            json={"email": "admin2@test.com", "password": "password123"}
+        )
+        assert response.status_code == 403
+        assert "Admin already exists" in response.json()["detail"]
+
+
+class TestRefreshToken:
+    """Test refresh token functionality."""
+    
+    @pytest.mark.asyncio
+    async def test_register_returns_both_tokens(self, client):
+        """Test that registration returns both access and refresh tokens."""
+        response = await client.post(
+            "/register",
+            json={"email": "test@example.com", "password": "password123"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token" in data
+        assert "refresh_token" in data
+        assert data["token_type"] == "bearer"
+
+    @pytest.mark.asyncio
+    async def test_login_returns_both_tokens(self, client):
+        """Test that login returns both access and refresh tokens."""
+        # First register
+        await client.post(
+            "/register",
+            json={"email": "test@example.com", "password": "password123"}
+        )
+        
+        # Then login
+        response = await client.post(
+            "/login",
+            json={"email": "test@example.com", "password": "password123"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token" in data
+        assert "refresh_token" in data
+
+    @pytest.mark.asyncio
+    async def test_refresh_endpoint_returns_new_tokens(self, client):
+        """Test that refresh endpoint generates new tokens."""
+        # Register and get tokens
+        register_resp = await client.post(
+            "/register",
+            json={"email": "test@example.com", "password": "password123"}
+        )
+        tokens = register_resp.json()
+        refresh_token = tokens["refresh_token"]
+        
+        # Call refresh endpoint
+        response = await client.post(
+            "/refresh",
+            headers={"Authorization": f"Bearer {refresh_token}"}
+        )
+        assert response.status_code == 200
+        new_tokens = response.json()
+        assert "access_token" in new_tokens
+        assert "refresh_token" in new_tokens
+        # New tokens should be valid JWT tokens
+        assert len(new_tokens["access_token"]) > 10
+        assert len(new_tokens["refresh_token"]) > 10
+
+    @pytest.mark.asyncio
+    async def test_logout_endpoint(self, client):
+        """Test that logout endpoint works."""
+        # Register
+        register_resp = await client.post(
+            "/register",
+            json={"email": "test@example.com", "password": "password123"}
+        )
+        access_token = register_resp.json()["access_token"]
+        
+        # Logout
+        response = await client.post(
+            "/logout",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200
+        assert "message" in response.json()
+
+    @pytest.mark.asyncio
+    async def test_refresh_with_invalid_token(self, client):
+        """Test that refresh with invalid token fails."""
+        response = await client.post(
+            "/refresh",
+            headers={"Authorization": "Bearer invalid_token"}
+        )
+        assert response.status_code == 401

@@ -36,6 +36,7 @@ class PresenceSubmissionWorker(
                     location = "auto-detected"
                 )
             )
+            prefs.updateLastSyncTime()
             Log.d(TAG, "Presence sent: ${response.id}")
             Result.success()
         } catch (e: Exception) {

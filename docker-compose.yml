@@ -1,0 +1,68 @@
+
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: smart-attendance-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: smart-attendance-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  find3:
+    image: schollz/find3:latest
+    container_name: smart-attendance-find3
+    ports:
+      - "8005:8003"
+      - "1883:1883"
+    volumes:
+      - find3_data:/data
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: smart-attendance-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server:/app
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
+      - REDIS_URL=redis://redis:6379/0
+      - FIND3_WS_URL=ws://find3:8003/ws?family=smart_attendance&device=all
+      - JWT_SECRET=7Qhg9fn5jCmbyyfM33s2YaJ8vXDRa8+Wtw1p9ruFGXk=
+      - HOST=0.0.0.0
+      - PORT=8000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  find3_data:
