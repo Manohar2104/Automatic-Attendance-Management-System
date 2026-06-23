@@ -131,7 +131,23 @@ All original tasks from the base version are retained with their original number
 ---
 
 ## Phase 10: Integration Tests (updated)
-*(Tasks 10.1–10.8 unchanged. Add new tests.)*
+ [ ] 10. Write backend integration tests covering full session lifecycle, transactions, rate limiting, and architecture corrections
+  - [ ] 10.1 Write full session lifecycle integration test: start session → student joins → 5 heartbeats accepted → end session → verify final attendance status and score in DB; run against Docker Compose test environment
+    - _Requirements: 4.1, 4.4, 6.1, 7.4, 8.5_
+  - [ ] 10.2 Write WebSocket event delivery integration test: verify `SESSION_STARTED`, `NEW_TOKEN`, `HEARTBEAT_ACK`, `SESSION_ENDED` events are delivered to subscribed clients in correct order with correct payloads
+    - _Requirements: 4.2, 4.4, 5.3, 7.4, 10.1, 10.3_
+  - [ ] 10.3 Write transaction atomicity integration test: simulate PostgreSQL failure mid-heartbeat write; verify rollback leaves both `heartbeats` and `attendance` tables unchanged; verify HTTP 500 returned to client
+    - _Requirements: 15.3, 15.4_
+  - [ ] 10.4 Write rate limiting integration test: submit 4 heartbeats within 60 seconds → all accepted; submit 5th → HTTP 429; wait for window to reset → 5th accepted
+    - _Requirements: 14.6, 14.7_
+  - [ ] 10.5 Write gap detection integration test: submit heartbeat with `seqNo = 1`, then `seqNo = 4`; verify `seqNo = 4` accepted, `sequence_gaps` contains entries for sequences 2 and 3, `lastAcceptedSequenceNumber = 4`
+    - _Requirements: 7.2a, 14.2, 14.3_
+  - [ ] 10.6 Write HMAC replay protection integration test: submit a valid heartbeat; capture the `tokenHmac`; resubmit the same heartbeat with the same `tokenHmac`; verify HTTP 401 on the second submission
+    - _Requirements: 14.1, 14.5_
+  - [ ] 10.7 Write configurable weights integration test: set custom weights via `POST /sessions/:id/weights`; submit heartbeats; verify final score uses custom weights from DB, not hardcoded defaults
+    - _Requirements: 8.1_
+  - [ ] 10.8 Write negative fingerprint integration test: register CLASSROOM samples and NEGATIVE samples for a room; submit a scan matching the NEGATIVE samples more closely than CLASSROOM samples; verify `locationConfidence = "VERY_WEAK_MATCH"` or `"WEAK_MATCH"` and `classification = "OUTSIDE_CLASSROOM"`
+    - _Requirements: 3.2, 3.3_
 
 - [ ] **10.9 [NEW]** Write device binding integration test: student first login → binding created; second-device login → second binding created; third-device login → HTTP 409; admin revoke → binding revoked; login from revoked device creates new binding.
   - *Requirements: 1.11, 1.13*
@@ -145,19 +161,71 @@ All original tasks from the base version are retained with their original number
 ---
 
 ## Phase 11: Integration Test Checkpoint (unchanged)
+Checkpoint — ensure all backend tests (unit, property-based, integration) pass before proceeding to Android
+  - Ensure all tests pass, ask the user if questions arise.
 
 ---
 
 ## Phase 12: Android Application (updated)
 *(Tasks 12.1–12.14 unchanged. Add one new task.)*
-
+12.1 Initialise the Android project in `android/` using Kotlin + Gradle; configure MVVM architecture with Jetpack ViewModel, LiveData/StateFlow, Hilt for dependency injection, Retrofit for HTTP, OkHttp for WebSocket, and Room for local caching; set `minSdk = 26`, `targetSdk = 34`
+    - _Requirements: 6.1, 13.1_
+  - [ ] 12.2 Implement the Authentication screens (Login, Register) with ViewModel state management; store JWT access token and refresh token in `EncryptedSharedPreferences`; implement token refresh interceptor in OkHttp that automatically refreshes the access token on 401 responses
+    - _Requirements: 1.1, 1.2, 1.4_
+  - [ ] 12.3 Implement the Student Dashboard screen: display list of ACTIVE sessions from `GET /sessions/active`; display attendance history (last 50 sessions); handle empty state; navigate to Session Join screen on tap
+    - _Requirements: 13.1, 13.6_
+  - [ ] 12.4 Implement the Session Join flow: check Wi-Fi enabled before join; call `POST /sessions/:id/join`; on success, start the Foreground Service; display error if Wi-Fi is disabled
+    - _Requirements: 13.2_
+  - [ ] 12.5 Implement the Foreground Service (`AttendanceService.kt`): display persistent notification with session name and connection status (Connected / Reconnecting / Disconnected); schedule heartbeat transmission every 30 seconds; scan Wi-Fi APs (up to 20) before each heartbeat; compute `HMAC-SHA256(rollingToken + studentId + clientTimestamp)` and include in heartbeat payload; increment `sequenceNumber` per heartbeat (Correction 7)
+    - _Requirements: 6.1, 6.2, 6.3, 6.4_
+  - [ ] 12.6 Implement HMAC computation in the Android app (`HmacUtils.kt`): `computeHmac(token: String, studentId: String, timestamp: Long): String` using `javax.crypto.Mac` with `HmacSHA256`; the shared secret is the `rollingSessionToken` received via WebSocket (Correction 7)
+    - _Requirements: 14.1_
+  - [ ] 12.7 Implement WebSocket client (`SessionWebSocketClient.kt`): connect on session join; handle `NEW_TOKEN` (update local token + sequenceNumber), `HEARTBEAT_ACK` (update UI score), `SESSION_ENDED` (stop service), `TOKEN_REFRESH` (on reconnect); implement exponential backoff reconnection: 2s, 4s, 8s, … up to 60s
+    - _Requirements: 6.4, 6.5, 9.4_
+  - [ ] 12.8 Implement WorkManager fallback (`HeartbeatWorker.kt`): schedule a periodic Wi-Fi scan task with interval ≤ 30 seconds as a fallback when the Foreground Service is temporarily unavailable; cancel the worker when the Foreground Service resumes
+    - _Requirements: 13.7_
+  - [ ] 12.9 Implement the Live Session screen: display session name, elapsed time, current `Presence_Confidence_Score`, connection status; update score within 5 seconds of `HEARTBEAT_ACK`; show component breakdown (fingerprintScore, continuityScore, packetStability, joinScore)
+    - _Requirements: 13.4, 13.5_
+  - [ ] 12.10 Implement runtime permission handling: request `ACCESS_FINE_LOCATION`, `ACCESS_WIFI_STATE`, `NEARBY_WIFI_DEVICES` (Android 12+) at session join time; display a descriptive error and prevent join if any required permission is denied (Correction 4)
+    - _Requirements: 6.8_
+  - [ ] 12.11 Implement heartbeat retry logic: on network error, retry once after 5 seconds; on Wi-Fi scan failure, transmit heartbeat with empty `fingerprintData` array; handle Wi-Fi disabled mid-session as a connectivity interruption applying fault tolerance rules
+    - _Requirements: 6.9, 6.10, 13.3_
+  - [ ] 12.12 Write `docs/ANDROID_LIMITATIONS.md` documenting: Android 10+ background Wi-Fi scan throttling (4 scans per 2 minutes); Android 11+ restrictions on `WifiManager.startScan()`; Android 12+ `NEARBY_WIFI_DEVICES` permission requirement; required permissions; Location Services dependency; recommended mitigations (Correction 4)
+    - _Requirements: 6.8_
+  - [ ]* 12.13 Write Android unit tests (JUnit + MockK): ViewModel state transitions (joining, active, disconnected); Foreground Service heartbeat scheduling at 30-second intervals; exponential backoff logic (2s, 4s, 8s, …, 60s cap); `HmacUtils.computeHmac` produces consistent output; `sequenceNumber` increments correctly per heartbeat
+    - _Requirements: 6.1, 6.4, 6.5, 14.1_
+  - [ ]* 12.14 Write Android property tests (Kotest): Wi-Fi scan vector construction with arbitrary AP lists (0–20 entries); fingerprint data serialization round-trip (serialize → deserialize → equal); HMAC computation is deterministic for same inputs across arbitrary `(token, studentId, timestamp)` triples
+    - _Requirements: 6.2, 14.1_
 - [ ] **12.15 [NEW]** Implement `DeviceFingerprintUtils.kt`: `getDeviceFingerprint(context: Context): String` using `Settings.Secure.ANDROID_ID` with a SHA-256 hash for stability; include `deviceFingerprint` in the heartbeat payload and pass it to the Auth Service at login time.
   - *Requirements: 1.11, 6.11*
 
 ---
 
 ## Phase 13: Teacher Dashboard (updated)
-*(Tasks 13.1–13.12 unchanged. Add new tasks.)*
+13.1 Initialise the `dashboard/` React 18 + Vite project with TypeScript; install dependencies: `@tanstack/react-query`, `react-router-dom`, `axios`, `recharts`, `papaparse`; configure Nginx `nginx.conf` to proxy `/api` and `/ws` to the backend
+    - _Requirements: 11.1, 16.3_
+  - [ ] 13.2 Implement authentication screens (Login page) with JWT storage in `localStorage`; implement an Axios interceptor for automatic token refresh; implement protected route wrapper that redirects unauthenticated users to login
+    - _Requirements: 1.1, 1.4_
+  - [ ] 13.3 Implement the Classroom Management page: list teacher's classrooms; create new classroom; navigate to fingerprint registration; display classroom details including `fingerprint_distance_threshold`
+    - _Requirements: 11.1_
+  - [ ] 13.4 Implement the Fingerprint Registration page: form to submit CLASSROOM and NEGATIVE fingerprint samples with `sampleType`, `locationLabel`, and AP list; display registered samples grouped by type; delete all fingerprints button (Correction 5)
+    - _Requirements: 2.1, 2.7_
+  - [ ] 13.5 Implement the Session Management page: start new session form with `classroomId`, `courseName`, and configurable `joinWindowMinutes` (5–15, default 5); display ACTIVE session with live attendance table; End Session button with confirmation dialog (Correction 3)
+    - _Requirements: 11.1, 11.3, 11.4, 11.6, 11.7, 11.8_
+  - [ ] 13.6 Implement the live attendance table: columns — student name, `Presence_Confidence_Score`, `Attendance_Status`, last heartbeat timestamp, score breakdown (fingerprintScore, continuityScore, packetStability, joinScore); poll `GET /sessions/:id/attendance/scores` every 5 seconds via TanStack Query; update within 5 seconds of score change
+    - _Requirements: 11.2, 11.5_
+  - [ ] 13.7 Implement the configurable weights panel on the Session Management page: allow teacher to set `locationConfidence`, `sessionContinuity`, `packetStability`, `joinScore` weights (must sum to 100); call `POST /sessions/:id/weights`; display current weights (Correction 6)
+    - _Requirements: 8.1_
+  - [ ] 13.8 Implement WebSocket integration in the Dashboard: connect on session start; handle `SCORE_UPDATE` events to update the live attendance table without polling; handle `SESSION_ENDED` to freeze the table and show final statuses; handle `NEW_TOKEN` to display current sequence number
+    - _Requirements: 11.2, 11.3_
+  - [ ] 13.9 Implement the CSV export: on "Export CSV" click for a completed session, fetch full attendance data and generate a CSV with columns `{studentName, studentId, attendanceStatus, confidenceScore, joinTime, lastHeartbeatTime}`; trigger browser download
+    - _Requirements: 11.9_
+  - [ ] 13.10 Implement the Historical Reporting page: session history list with date, duration, enrolled count, PRESENT/PARTIAL/ABSENT counts; filter by classroom, date range, attendance status; per-student aggregate statistics (attendance rate, average confidence score); session detail view with full per-student breakdown
+    - _Requirements: 12.1, 12.2, 12.3, 12.4_
+  - [ ]* 13.11 Write Dashboard unit tests (Vitest + React Testing Library): session list renders correctly; attendance table updates on new score data; CSV export generates correct column headers and row data; configurable weights form validates sum = 100; error message displayed on end-session failure
+    - _Requirements: 11.2, 11.4, 11.5, 11.8, 11.9_
+  - [ ]* 13.12 Write Dashboard E2E tests (Playwright): full teacher flow — login → create classroom → register fingerprints (CLASSROOM + NEGATIVE) → start session with custom `joinWindowMinutes` → view live attendance → set custom weights → end session → export CSV → verify CSV content
+    - _Requirements: 11.1, 11.2, 11.3, 11.5, 11.9, 12.1_
 
 - [ ] **13.13 [NEW]** Update the Session Management page: add `presenceThresholdPresent` (default 85, range 70–100) and `presenceThresholdPartial` (default 60, range 40–84) fields to the session creation form; validate `partial < present` client-side; display session thresholds in the session detail view.
   - *Requirements: 4.11, 11.10*
@@ -176,6 +244,19 @@ All original tasks from the base version are retained with their original number
 
 ## Phase 15: Final Documentation (updated)
 *(Tasks 15.1–15.6 unchanged. Add one new task.)*
+ - [ ] 15.1 Write `docs/MASTER_README.md`: project overview, architecture summary, quick-start instructions (`docker compose up`), environment variable reference, API endpoint index, and links to all phase READMEs and reports
+    - _Requirements: 16.1_
+  - [ ] 15.2 Write `docs/PROJECT_REPORT.md`: comprehensive project report covering problem statement, system design decisions, implementation challenges, all 8 architecture corrections applied, test results summary, and known limitations
+    - _Requirements: 16.1_
+  - [ ] 15.3 Write `docs/VIVA_GUIDE.md`: anticipated viva questions and model answers covering Wi-Fi fingerprinting theory, k-NN algorithm, HMAC security, rolling token design, gap-tolerant sequences, configurable weights, Android limitations, and Docker deployment
+    - _Requirements: 16.1_
+  - [ ] 15.4 Write `docs/CN_CONCEPTS_USED.md`: document all Computer Networks concepts applied — Wi-Fi 802.11 standards, RSSI measurement, BSSID/SSID, signal propagation, WebSocket protocol (RFC 6455), HTTP/1.1 REST, TCP keepalive, rate limiting, and network latency tolerance design
+    - _Requirements: 16.1_
+  - [ ] 15.5 Write `docs/OS_CONCEPTS_USED.md`: document all Operating Systems concepts applied — Android Foreground Service lifecycle, WorkManager scheduling, process priority, background execution limits (Android Doze mode), PostgreSQL transaction isolation, connection pooling, and Docker container networking
+    - _Requirements: 16.1_
+  - [ ] 15.6 Write `docs/SECURITY_CONCEPTS_USED.md`: document all security concepts applied — bcrypt password hashing, JWT authentication, HMAC-SHA256 token verification, replay attack prevention, timing-safe comparison, rate limiting, account lockout, nonce-based token derivation, and HTTPS/TLS recommendations
+    - _Requirements: 1.6, 5.6, 14.1, 14.5_
+
 
 - [ ] **15.7 [NEW]** Update `docs/SECURITY_CONCEPTS_USED.md` with: device binding as an identity-device correlation mechanism; how device fingerprint mismatches are flagged without hard rejection to avoid false positives; the audit log pattern for administrative overrides.
   - *Requirements: 1.11, 15.5*
