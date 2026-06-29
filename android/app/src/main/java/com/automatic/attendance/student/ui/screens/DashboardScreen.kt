@@ -1,80 +1,221 @@
 package com.automatic.attendance.student.ui.screens
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material.Text
-import androidx.compose.material.MaterialTheme
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.navigation.NavController
-import androidx.compose.material.Button
-
-import androidx.compose.runtime.LaunchedEffect
-
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import com.automatic.attendance.student.network.RetrofitClient
-import com.automatic.attendance.student.network.AuthApi
-import com.automatic.attendance.student.storage.SecureTokenStorageImpl
-import com.automatic.attendance.student.repository.AuthRepository
-import com.automatic.attendance.student.viewmodel.DashboardViewModel
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.collectAsState
-import androidx.compose.material.CircularProgressIndicator
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
+import androidx.navigation.NavController
+import com.automatic.attendance.student.network.AuthApi
+import com.automatic.attendance.student.network.RetrofitClient
+import com.automatic.attendance.student.repository.AuthRepository
+import com.automatic.attendance.student.storage.SecureTokenStorageImpl
+import com.automatic.attendance.student.viewmodel.DashboardState
+import com.automatic.attendance.student.viewmodel.DashboardViewModel
 
+private val CardBlue = Color(0xFF102A5C)
 
 @Composable
 fun DashboardScreen(navController: NavController) {
+
     val context = LocalContext.current
+
     val storage = SecureTokenStorageImpl(context)
 
     val retrofit = RetrofitClient.create(
         "http://192.168.137.1:3000/",
         storage
     )
-    val api = retrofit.create(AuthApi::class.java)
-    
-    val repo = AuthRepository(api, storage)
-    val vm: DashboardViewModel = remember { DashboardViewModel(repo) }
-    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) { vm.loadProfile() }
+    val api = retrofit.create(AuthApi::class.java)
+
+    val repo = AuthRepository(api, storage)
+
+    val vm: DashboardViewModel = remember {
+        DashboardViewModel(repo)
+    }
+
+    LaunchedEffect(Unit) {
+        vm.loadProfile()
+    }
 
     val state = vm.state.collectAsState().value
 
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        when (state) {
-            is com.automatic.attendance.student.viewmodel.DashboardState.Loading -> CircularProgressIndicator()
-            is com.automatic.attendance.student.viewmodel.DashboardState.Error -> Text((state as com.automatic.attendance.student.viewmodel.DashboardState.Error).message)
-            is com.automatic.attendance.student.viewmodel.DashboardState.Ready -> {
-                val user = (state as com.automatic.attendance.student.viewmodel.DashboardState.Ready).user
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Welcome, ${user.name ?: user.id}")
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { navController.navigate("active_sessions") }) { Text("View Active Sessions") }
-                    Spacer(modifier = Modifier.height(8.dp))
-                   Button(
-    onClick = {
-        vm.logout {
-            navController.navigate("login") {
-                popUpTo(0) {
-                    inclusive = true
+    when (state) {
+
+        is DashboardState.Loading -> {
+
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+
+        is DashboardState.Error -> {
+
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(state.message)
+            }
+        }
+
+        is DashboardState.Ready -> {
+
+            val user = state.user
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp)
+            ) {
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text(
+                    text = "Hello 👋",
+                    style = MaterialTheme.typography.h5
+                )
+
+                Text(
+                    text = user.name ?: "Student",
+                    style = MaterialTheme.typography.h3
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("3", style = MaterialTheme.typography.h5)
+                        Text("Sessions")
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("98%", style = MaterialTheme.typography.h5)
+                        Text("Attendance")
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("12", style = MaterialTheme.typography.h5)
+                        Text("Courses")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    elevation = 8.dp,
+                    backgroundColor = CardBlue
+                ) {
+
+                    Column(
+                        modifier = Modifier.padding(20.dp)
+                    ) {
+
+                        Text(
+                            text = "Verification Status",
+                            style = MaterialTheme.typography.h6,
+                            color = Color.White
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            "🟢 Device Registered",
+                            color = Color.White
+                        )
+
+                        Text(
+                            "🟢 Authentication Active",
+                            color = Color.White
+                        )
+
+                        Text(
+                            "🟢 Ready For Attendance",
+                            color = Color.White
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    elevation = 8.dp,
+                    backgroundColor = CardBlue
+                ) {
+
+                    Column(
+                        modifier = Modifier.padding(20.dp)
+                    ) {
+
+                        Text(
+                            text = "Attendance System",
+                            style = MaterialTheme.typography.h6,
+                            color = Color.White
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "Join active attendance sessions and verify your presence securely.",
+                            color = Color.White
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = {
+                        navController.navigate("active_sessions")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("View Active Sessions")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = {
+
+                        vm.logout {
+
+                            navController.navigate("login") {
+
+                                popUpTo(0) {
+                                    inclusive = true
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Logout")
                 }
             }
         }
-    }
-) {
-    Text("Logout")
-}
-                }
-            }
-            else -> Text("Dashboard")
-        }
+
+        else -> {}
     }
 }

@@ -5,6 +5,7 @@ import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendanceRoutes';
 import heartbeatRoutes from './routes/heartbeatRoutes';
 import fingerprintRoutes from './routes/fingerprintRoutes';
+import sessionFingerprintRoutes from './routes/sessionFingerprintRoutes';
 import sessionRoutes from './routes/sessionRoutes';
 
 const app = express();
@@ -16,6 +17,7 @@ app.use('/auth', authRoutes);
 app.use('/attendance', attendanceRoutes);
 app.use('/heartbeats', heartbeatRoutes);
 app.use('/fingerprints', fingerprintRoutes);
+app.use('/sessions', sessionFingerprintRoutes);
 app.use('/sessions', sessionRoutes);
 
 app.get('/health', async (_req, res) => {

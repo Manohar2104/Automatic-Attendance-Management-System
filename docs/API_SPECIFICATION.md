@@ -793,6 +793,95 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/AttendanceRecord' }
 
+  /sessions/{id}/fingerprint:
+    post:
+      tags: [Sessions, Fingerprinting]
+      summary: Store teacher reference fingerprint for a session
+      security: [{ BearerAuth: [] }]
+      description: |
+        Teacher role. Stores one reference fingerprint per session.
+        Repeated captures replace the existing reference fingerprint for that session.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fingerprint_data]
+              properties:
+                fingerprint_data:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [bssid, rssi]
+                    properties:
+                      bssid:
+                        type: string
+                        pattern: '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'
+                      ssid:
+                        type: string
+                        nullable: true
+                      rssi:
+                        type: integer
+                        minimum: -100
+                        maximum: 0
+      responses:
+        "200":
+          description: Stored reference fingerprint
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string, format: uuid }
+                  teacher_id: { type: string, format: uuid }
+                  captured_at: { type: string, format: date-time }
+                  fingerprint_data:
+                    type: array
+                    items:
+                      type: object
+        "400":
+          description: Invalid fingerprint payload
+        "403":
+          description: Teacher does not own the session
+        "409":
+          description: Session is not ACTIVE
+    get:
+      tags: [Sessions, Fingerprinting]
+      summary: Fetch teacher reference fingerprint for a session
+      security: [{ BearerAuth: [] }]
+      description: Returns the stored reference fingerprint for the authenticated session owner.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Stored reference fingerprint
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string, format: uuid }
+                  teacher_id: { type: string, format: uuid }
+                  captured_at: { type: string, format: date-time }
+                  fingerprint_data:
+                    type: array
+                    items:
+                      type: object
+        "403":
+          description: Teacher does not own the session
+        "404":
+          description: Session or reference fingerprint not found
+
   # ══════════════════════════════════════════════════════════
   # HEARTBEAT
   # ══════════════════════════════════════════════════════════

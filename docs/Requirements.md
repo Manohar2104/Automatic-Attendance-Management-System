@@ -14,8 +14,8 @@ Three additions from teammate review have been incorporated:
 
 The system has four components:
 1. **Backend Attendance Server** — Node.js/Express.js REST API + WebSocket server backed by PostgreSQL
-2. **Android Student Application** — Kotlin/MVVM app with Foreground Service for Wi-Fi scanning and heartbeat transmission
-3. **Teacher Dashboard** — React.js SPA for session management, live attendance, and reporting
+2. **Android Student Application** — Kotlin/MVVM app with Foreground Service for daily registration, Wi-Fi scanning, and heartbeat transmission
+3. **Teacher Dashboard** — React.js SPA for timetable oversight, live attendance, and reporting
 4. **Authentication Layer** — JWT-based auth shared across all components
 
 ---
@@ -88,26 +88,18 @@ The system has four components:
 
 ### Requirement 4: Session Lifecycle Management
 
-**User Story:** As a Teacher, I want to start and end lecture sessions with configurable join windows and attendance thresholds, so that the system adapts to my classroom's needs.
+**User Story:** As the system, I want lecture sessions to be materialized from the timetable and activated automatically, so that attendance tracking begins without manual teacher control.
 
 #### Acceptance Criteria
 
-**User Story:** As a Teacher, I want to start and end lecture sessions, so that the system knows when attendance tracking is active.
-
-#### Acceptance Criteria
-
-1. WHEN a Teacher sends a start-session request with {classroomId, courseName}, THE Session_Manager SHALL create a new Session record with a unique Session_ID, start timestamp, and status ACTIVE.
-2. WHEN a new Session record is created, THE Session_Manager SHALL broadcast a SESSION_STARTED WebSocket event to all connected clients within 1 second.
-3. THE Session_Manager SHALL enforce that a Teacher can have at most one ACTIVE session per classroom at any given time; IF a Teacher attempts to start a second concurrent session in the same classroom, THEN THE Session_Manager SHALL return an HTTP 409 response.
-4. WHEN a Teacher sends an end-session request for an ACTIVE session, THE Session_Manager SHALL set the session status to CLOSED, record the end timestamp, trigger final Attendance_Status computation for all enrolled students, and broadcast a SESSION_ENDED WebSocket event within 1 second of session closure.
-5. IF a Teacher sends an end-session request for a session that is not ACTIVE or does not exist, THEN THE Session_Manager SHALL return an HTTP 404 response.
-6. WHEN a Student attempts to join a session more than 5 minutes after the session start time, THE Session_Manager SHALL assign the Student a joinScore of 0 and an Attendance_Status of REJECTED without processing further heartbeats.
-7. WHEN a Student joins within 0–2 minutes (inclusive) of session start, THE Session_Manager SHALL assign a joinScore of 100.
-8. WHEN a Student joins more than 2 minutes and less than 5 minutes after session start, THE Session_Manager SHALL assign a joinScore of 50.
-9. WHEN a Student whose Attendance_Status is REJECTED sends a heartbeat, THE Heartbeat_Processor SHALL reject the heartbeat with an HTTP 403 response and SHALL NOT update any attendance record.
-10. THE Session_Manager SHALL record the join timestamp for each Student enrollment.
-11. WHEN a Teacher creates a session, THE Session_Manager SHALL accept optional `presenceThresholdPresent` (default 85, range 70–100) and `presenceThresholdPartial` (default 60, range 40–84) parameters and SHALL persist them in the Sessions table; IF `presenceThresholdPartial >= presenceThresholdPresent`, THE Session_Manager SHALL return HTTP 400.
-12. THE Session_Manager SHALL use the session-specific `presenceThresholdPresent` and `presenceThresholdPartial` values when computing final Attendance_Status; IF these values are absent, THE Session_Manager SHALL use the defaults (85 and 60).
+1. WHEN the backend materializes the academic timetable for a day, THE Session_Manager SHALL create lecture session records for all scheduled lectures before the academic day begins.
+2. WHEN the current time falls within a scheduled lecture window AND the teacher's registered device is detected inside the classroom, THE Session_Manager SHALL set the session status to ACTIVE and SHALL broadcast a SESSION_STARTED WebSocket event to subscribed clients within 1 second.
+3. IF the current time is outside the scheduled lecture window OR the teacher device is not detected inside the classroom, THEN THE Session_Manager SHALL keep the session INACTIVE and SHALL NOT broadcast an activation event.
+4. WHEN an ACTIVE session reaches its scheduled end time OR the teacher device leaves the classroom beyond the configured timeout, THE Session_Manager SHALL set the session status to CLOSED, record the end timestamp, trigger final Attendance_Status computation for all enrolled students, and broadcast a SESSION_ENDED WebSocket event within 1 second of closure.
+5. IF the backend attempts to activate a session that is already ACTIVE, CLOSED, or otherwise outside the activation window, THEN THE Session_Manager SHALL return HTTP 409 or HTTP 404 according to the resource state.
+6. WHEN a lecture session is materialized, THE Session_Manager SHALL persist session-specific `presenceThresholdPresent` (default 85, range 70–100) and `presenceThresholdPartial` (default 60, range 40–84) values; IF `presenceThresholdPartial >= presenceThresholdPresent`, THEN THE Session_Manager SHALL return HTTP 400.
+7. THE Session_Manager SHALL use the session-specific `presenceThresholdPresent` and `presenceThresholdPartial` values when computing final Attendance_Status; IF these values are absent, THE Session_Manager SHALL use the defaults (85 and 60).
+8. THE Session_Manager SHALL record the activation metadata for each lecture session, including scheduled lecture time, activation timestamp, and teacher presence source.
 
 ---
 
@@ -140,7 +132,7 @@ The system has four components:
 5. IF the WebSocket connection is lost, THEN THE Foreground_Service SHALL attempt reconnection using exponential backoff starting at 2 seconds, doubling up to a maximum of 60 seconds, and SHALL continue retrying indefinitely until the session ends.
 6. WHEN the session ends OR IF the Student explicitly leaves the session, THE Foreground_Service SHALL cease heartbeat transmission; resource release may occur as a separate operation after heartbeat transmission has ceased.
 7. IF the Student explicitly leaves the session, THEN THE Foreground_Service SHALL cease heartbeat transmission immediately, regardless of session state; resource release may occur as a separate operation after heartbeat transmission has ceased.
-8. THE Android_App SHALL request the ACCESS_WIFI_STATE and CHANGE_WIFI_STATE permissions at runtime and SHALL inform the Student if permissions are denied, preventing session join.
+8. THE Android_App SHALL request the ACCESS_WIFI_STATE and CHANGE_WIFI_STATE permissions at runtime and SHALL inform the Student if permissions are denied, preventing daily registration or lecture monitoring.
 9. IF a heartbeat transmission fails due to a network error, THEN THE Foreground_Service SHALL retry the transmission once after 5 seconds before discarding the heartbeat and continuing with the next scheduled transmission.
 10. IF the Wi-Fi scan fails or returns no results, THEN THE Foreground_Service SHALL transmit the heartbeat with an empty `fingerprintData` array rather than skipping the transmission.
 11. THE Foreground_Service SHALL include the `deviceFingerprint` in each heartbeat payload so that the Heartbeat_Processor can cross-check device binding.
@@ -220,23 +212,21 @@ The system has four components:
 
 ---
 
-### Requirement 11: Teacher Dashboard — Session Management
+### Requirement 11: Teacher Dashboard — Session Monitoring
 
-**User Story:** As a Teacher, I want a web interface to start and end sessions and monitor attendance in real time, so that I can manage classroom attendance without technical complexity.
+**User Story:** As a Teacher, I want a web interface to view timetable-driven lecture sessions and monitor attendance in real time, so that I can supervise classes without manual session control.
 
 #### Acceptance Criteria
 
-1. WHEN a Teacher is authenticated, THE Dashboard SHALL display a list of the Teacher's classrooms and allow the Teacher to start a new session for any classroom with a single action.
-2. WHILE a session is ACTIVE, THE Dashboard SHALL display a live attendance table showing each enrolled Student's name, current Presence_Confidence_Score, Attendance_Status, and last heartbeat timestamp, updated within 5 seconds of each score change.
-3. WHEN a Teacher clicks "End Session" for an ACTIVE session, THE Dashboard SHALL send an end-session request to the Backend and SHALL update the display to show final Attendance_Status for all students within 3 seconds of session closure.
-4. IF the end-session request to the Backend fails, THEN THE Dashboard SHALL display an error message to the Teacher and SHALL retain the session in its current ACTIVE display state.
-5. WHEN a session is ACTIVE, THE Dashboard SHALL display a per-student confidence score breakdown showing fingerprintScore, continuityScore, packetStability, and joinScore components.
-6. THE System SHALL only allow session termination through explicit Teacher action and SHALL NOT automatically end sessions based on timeouts or other conditions.
-7. THE Session_Manager SHALL enforce that a Teacher cannot start a new session for a classroom that already has an ACTIVE session; IF such an attempt is made, THE Dashboard SHALL display an HTTP 409 error to the Teacher.
-8. IF the end-session Backend request fails, THEN THE Dashboard SHALL display a descriptive error message and SHALL NOT update the session status to CLOSED.
-9. THE Dashboard SHALL allow the Teacher to export the attendance record for a completed session as a CSV file containing {studentName, studentId, attendanceStatus, confidenceScore, joinTime, lastHeartbeatTime}.
-
-10. THE Dashboard SHALL allow the Teacher to set session-specific `presenceThresholdPresent` and `presenceThresholdPartial` values when creating a session; IF not set, defaults (85/60) SHALL be displayed.
+1. WHEN a Teacher is authenticated, THE Dashboard SHALL display the Teacher's timetable, the current lecture, and any automatically ACTIVE lecture sessions for the day.
+2. WHILE a lecture session is ACTIVE, THE Dashboard SHALL display a live attendance table showing each enrolled Student's name, current Presence_Confidence_Score, Attendance_Status, and last heartbeat timestamp, updated within 5 seconds of each score change.
+3. WHEN the backend automatically closes a session, THE Dashboard SHALL update the display to show final Attendance_Status for all students within 3 seconds of session closure.
+4. IF the dashboard cannot fetch the current lecture or live attendance state, THEN THE Dashboard SHALL display an error message and SHALL retain the last known state until refreshed.
+5. WHILE a session is ACTIVE, THE Dashboard SHALL display a per-student confidence score breakdown showing fingerprintScore, continuityScore, packetStability, and joinScore components.
+6. THE System SHALL only allow session termination through the automatic lifecycle and SHALL NOT require explicit Teacher action to start or stop attendance tracking.
+7. THE Dashboard SHALL display automated activation metadata, including scheduled lecture time, activation time, and teacher presence source.
+8. THE Dashboard SHALL allow the Teacher to export the attendance record for a completed session as a CSV file containing {studentName, studentId, attendanceStatus, confidenceScore, joinTime, lastHeartbeatTime}.
+9. THE Dashboard SHALL display session-specific `presenceThresholdPresent` and `presenceThresholdPartial` values as read-only policy values.
 
 ---
 
@@ -253,16 +243,16 @@ The system has four components:
 
 ---
 
-### Requirement 13: Android App — Student Session Flow
+### Requirement 13: Android App — Daily Monitoring Flow
 
-**User Story:** As a Student, I want a simple mobile interface to join sessions and view my attendance status, so that I can participate in attendance tracking without friction.
+**User Story:** As a Student, I want a simple mobile interface to register once per day and view my attendance status, so that I can participate in timetable-driven attendance tracking without friction.
 
 #### Acceptance Criteria
 
-1. WHEN a Student opens the Android_App and is authenticated, THE Android_App SHALL display a dashboard showing available ACTIVE sessions (sessions with status ACTIVE) and the Student's attendance history for up to the last 50 sessions; IF no ACTIVE sessions are available, THE Android_App SHALL display an empty state message.
-2. WHEN a Student taps "Join Session", THE Android_App SHALL verify that Wi-Fi is enabled on the device and SHALL display an error message if Wi-Fi is disabled, preventing session join.
-3. IF Wi-Fi becomes disabled after the Student has joined a session, THEN THE Foreground_Service SHALL treat the event as a connectivity interruption and SHALL apply the fault tolerance rules defined in Requirement 9.
-4. WHEN a Student successfully joins a session, THE Android_App SHALL start the Foreground_Service and SHALL display a live synchronization status screen showing the current session name, elapsed time, current Presence_Confidence_Score, and connection status (one of: Connected, Reconnecting, or Disconnected).
+1. WHEN a Student opens the Android_App and is authenticated, THE Android_App SHALL display the day's timetable, the current lecture if one is ACTIVE, and the Student's attendance history for up to the last 50 sessions; IF no lecture is ACTIVE, THE Android_App SHALL display an empty state message for the live view.
+2. WHEN a Student completes daily registration, THE Android_App SHALL verify that Wi-Fi is enabled on the device and SHALL display an error message if Wi-Fi is disabled, preventing monitoring from starting.
+3. IF Wi-Fi becomes disabled after daily registration, THEN THE Foreground_Service SHALL treat the event as a connectivity interruption and SHALL apply the fault tolerance rules defined in Requirement 9.
+4. WHEN daily registration succeeds, THE Android_App SHALL start the Foreground_Service and SHALL display a live synchronization status screen showing the current lecture name, elapsed time, current Presence_Confidence_Score, and connection status (one of: Connected, Reconnecting, or Disconnected).
 5. WHEN the Android_App receives a HEARTBEAT_ACK event from the server, THE Android_App SHALL update the displayed Presence_Confidence_Score within 5 seconds.
 6. WHEN a Student navigates to the attendance history screen, THE Android_App SHALL display the Student's attendance history including session date, course name, Attendance_Status, and final confidence score for each of the last 50 past sessions.
 7. THE Android_App SHALL use WorkManager to schedule a periodic Wi-Fi scan task as a fallback mechanism when the Foreground_Service is temporarily unavailable; the scan interval SHALL not exceed 30 seconds.
@@ -340,3 +330,450 @@ Additional table:
 7. IF a port override environment variable is set, THEN THE System SHALL use the specified port value in place of the default for the corresponding service.
 8. WHEN the Backend container starts, THE Backend SHALL wait for the PostgreSQL service to be available and accepting connections before beginning its startup sequence.
 9. THE docker-compose.yml SHALL define health checks for each service (Backend, PostgreSQL, and Dashboard) so that dependent services start only after their dependencies are healthy.
+
+## Requirements Migration Summary
+
+### Updated Requirements
+
+- Requirement 4: Session Lifecycle Management now describes timetable-driven materialization, automatic activation, and automatic closure.
+- Requirement 11: Teacher Dashboard — Session Management now describes timetable oversight and live monitoring instead of manual start/end controls.
+- Requirement 13: Android App — Student Session Flow now describes daily registration and continuous monitoring instead of per-session joining.
+
+### Deprecated Requirements
+
+- Manual teacher session creation, manual start, manual end, and manual student join behavior are deprecated and retained only as historical context in earlier drafts.
+- The old session-centric wording in the dashboard and Android acceptance criteria should not be used as implementation guidance.
+
+### Removed Requirements
+
+- None removed; the numbering remains intact to preserve traceability.
+
+# Updated Functional Requirements (Professor Review Changes)
+
+## Requirement Update Overview
+
+The original architecture required teachers to manually create attendance sessions and students to join individual lecture sessions.
+
+After project review, the attendance workflow has been redesigned to achieve:
+
+* Zero manual attendance interaction from teachers.
+* Single daily registration for students.
+* Automatic session activation based on timetable and teacher presence.
+* Continuous attendance monitoring throughout the day.
+* Automatic attendance determination for late arrivals, breaks, bunked classes, and half-day exits.
+
+---
+
+# FR-01 Timetable-Based Session Scheduling
+
+## Objective
+
+Eliminate manual session creation by teachers.
+
+## Requirement
+
+A timetable coordinator shall upload the weekly timetable into the system.
+
+The timetable shall contain:
+
+* Course
+* Faculty
+* Classroom
+* Day
+* Start Time
+* End Time
+
+## System Behavior
+
+The backend shall automatically generate attendance sessions from the uploaded timetable.
+
+Example:
+
+| Course | Time        |
+| ------ | ----------- |
+| DBMS   | 09:00–10:00 |
+| CN     | 10:00–11:00 |
+| OS     | 11:15–12:15 |
+| AI     | 14:00–15:00 |
+
+These sessions shall already exist before the academic day begins.
+
+---
+
+# FR-02 Automatic Session Activation
+
+## Objective
+
+Remove teacher interaction completely.
+
+## Requirement
+
+Attendance sessions shall automatically start only when:
+
+1. Current time falls within the scheduled lecture time.
+2. Teacher's registered device is detected inside the classroom.
+
+Both conditions must be satisfied.
+
+## Session Activation Logic
+
+```text
+Current Time
+↓
+Matches Scheduled Session
+↓
+Teacher Device Detected
+↓
+Session Activated
+```
+
+Example:
+
+DBMS Lecture
+
+Scheduled:
+
+09:00–10:00
+
+Teacher enters classroom:
+
+08:50
+
+Session remains inactive.
+
+Teacher enters classroom:
+
+09:02
+
+Session automatically activates.
+
+Teacher enters classroom:
+
+10:15
+
+DBMS session will not activate because lecture time has already passed.
+
+---
+
+# FR-03 Daily Student Registration
+
+## Objective
+
+Remove session-by-session joining.
+
+## Requirement
+
+Students shall register once at the beginning of the day.
+
+Registration represents participation for all timetable sessions scheduled that day.
+
+## Workflow
+
+```text
+Student Arrives
+↓
+Daily Registration
+↓
+Device Binding Verified
+↓
+Monitoring Enabled
+↓
+All Day Sessions Linked
+```
+
+Students shall not join individual lecture sessions.
+
+Students shall not re-register after breaks.
+
+---
+
+# FR-04 Continuous Attendance Monitoring
+
+## Requirement
+
+After daily registration:
+
+The system shall continuously monitor:
+
+* Device presence
+* Wi-Fi fingerprints
+* Rolling session tokens
+* Heartbeats
+* Classroom session state
+
+throughout the day.
+
+---
+
+# FR-05 Late Arrival Handling
+
+## Requirement
+
+Students arriving after one or more lectures have already completed shall be marked absent for missed sessions.
+
+Example:
+
+| Session     | Status  |
+| ----------- | ------- |
+| 09:00–10:00 | Absent  |
+| 10:00–11:00 | Present |
+| 11:15–12:15 | Present |
+
+Student enters campus:
+
+10:05 AM
+
+Result:
+
+* First lecture absent.
+* Remaining lectures monitored normally.
+
+---
+
+# FR-06 Lunch Break and Short Break Handling
+
+## Requirement
+
+Students shall not re-register after breaks.
+
+Monitoring shall automatically resume when the student's device reconnects to the campus environment.
+
+Example:
+
+```text
+Morning Sessions
+↓
+Lunch Break
+↓
+Student Returns
+↓
+Monitoring Continues
+```
+
+No additional registration required.
+
+---
+
+# FR-07 Half-Day Leave Handling
+
+## Requirement
+
+If a student leaves campus and does not return:
+
+All remaining sessions shall be marked absent.
+
+Example:
+
+| Session   | Status  |
+| --------- | ------- |
+| Session 1 | Present |
+| Session 2 | Present |
+| Session 3 | Absent  |
+| Session 4 | Absent  |
+
+---
+
+# FR-08 Bunked Lecture Detection
+
+## Requirement
+
+Students skipping individual lectures shall be marked absent only for the skipped lecture.
+
+Example:
+
+```text
+Session 1
+Present
+
+Session 2
+Absent
+
+Session 3
+Present
+```
+
+The system shall continue monitoring after the skipped lecture.
+
+---
+
+# FR-09 Campus Exit and Re-entry
+
+## Requirement
+
+If a student leaves campus during a break:
+
+* Wi-Fi connection may be lost.
+* Heartbeats may stop.
+* Monitoring pauses.
+
+Upon returning:
+
+* Device identity shall be recognized.
+* Monitoring resumes automatically.
+
+The student shall NOT perform daily registration again.
+
+---
+
+# FR-10 Teacher Reference Fingerprint Collection
+
+## Requirement
+
+When a session becomes active:
+
+The teacher device shall automatically capture the classroom Wi-Fi environment.
+
+Captured data:
+
+* BSSID
+* SSID
+* RSSI
+
+The captured fingerprint shall become the reference fingerprint for that lecture session.
+
+---
+
+# FR-11 Student Wi-Fi Fingerprint Collection
+
+## Requirement
+
+Student devices shall periodically collect nearby Wi-Fi access points.
+
+Collected attributes:
+
+* BSSID
+* SSID
+* RSSI
+
+These fingerprints shall be compared against the teacher reference environment.
+
+---
+
+# FR-12 Multi-Factor Classroom Presence Verification
+
+## Objective
+
+Reduce false attendance caused by students standing outside the classroom.
+
+## Requirement
+
+Attendance confidence shall not rely solely on Wi-Fi fingerprinting.
+
+The system shall use:
+
+### Factor 1
+
+Wi-Fi Fingerprint Similarity
+
+Weight: 50%
+
+### Factor 2
+
+Heartbeat Continuity
+
+Weight: 20%
+
+### Factor 3
+
+Motion Correlation / Proximity Validation
+
+Weight: 30%
+
+This additional factor helps distinguish:
+
+* Inside classroom
+* Outside classroom
+* Nearby corridor
+* Adjacent canteen
+
+---
+
+# FR-13 BLE Proximity Enhancement (Future Enhancement)
+
+## Requirement
+
+Teacher devices may broadcast a BLE beacon.
+
+Student devices shall detect beacon strength.
+
+BLE proximity shall be used as an additional classroom verification signal.
+
+Benefits:
+
+* Improved classroom boundary detection.
+* Reduced false positives near classroom doors.
+* Better differentiation between classroom and nearby common areas.
+
+---
+
+# FR-14 Adaptive Heartbeat Strategy
+
+## Objective
+
+Reduce battery consumption.
+
+## Requirement
+
+Heartbeat frequency shall be adaptive.
+
+Normal monitoring:
+
+```text
+60-second interval
+```
+
+Suspicious conditions:
+
+```text
+15-second interval
+```
+
+Examples:
+
+* Wi-Fi environment changes.
+* Loss of teacher fingerprint match.
+* Unexpected movement.
+* Temporary disconnects.
+
+The system shall return to normal frequency after stability is restored.
+
+---
+
+# FR-15 Automatic Session Closure
+
+## Requirement
+
+Attendance sessions shall automatically close when:
+
+* Scheduled end time is reached.
+  OR
+* Teacher device leaves the classroom for a configured duration.
+
+Upon closure:
+
+* Attendance is finalized.
+* Confidence scores are calculated.
+* Final attendance status is generated.
+
+No teacher interaction required.
+
+---
+
+# Updated Attendance Philosophy
+
+The attendance system shall operate as a passive and automated classroom monitoring platform.
+
+Teachers shall not manually:
+
+* Create sessions.
+* Start sessions.
+* Stop sessions.
+* Mark attendance.
+
+Students shall not manually:
+
+* Join individual lectures.
+* Re-register after breaks.
+* Rejoin after temporary campus exits.
+
+Attendance determination shall be performed automatically using timetable awareness, device presence, Wi-Fi fingerprinting, rolling tokens, heartbeats, and proximity validation.

@@ -60,7 +60,7 @@ All original tasks from the base version are retained with their original number
 - [ ] **4.7 [NEW]** Update the `createSession` function to accept optional `presenceThresholdPresent` (default 85, range 70–100) and `presenceThresholdPartial` (default 60, range 40–84) parameters; validate `presenceThresholdPartial < presenceThresholdPresent` and return HTTP 400 if violated; persist both values to the `sessions` table.
   - *Requirements: 4.11, 4.12*
 
-- [ ] **4.8 [NEW]** Update the Session router to expose `presenceThresholdPresent` and `presenceThresholdPartial` in `POST /sessions` and `GET /sessions/:id` response bodies.
+- [ ] **4.8 [NEW]** Update the lecture session API to expose `presenceThresholdPresent` and `presenceThresholdPartial` in `GET /sessions/:id` response bodies and ensure timetable materialization persists the same values.
   - *Requirements: 4.11*
 
 - [ ]* **4.9 [NEW]** Write session threshold unit tests: `presenceThresholdPartial < presenceThresholdPresent` accepted; `presenceThresholdPartial = presenceThresholdPresent` returns HTTP 400; default values applied when not supplied; thresholds stored in DB and returned in session GET.
@@ -132,7 +132,7 @@ All original tasks from the base version are retained with their original number
 
 ## Phase 10: Integration Tests (updated)
  [ ] 10. Write backend integration tests covering full session lifecycle, transactions, rate limiting, and architecture corrections
-  - [ ] 10.1 Write full session lifecycle integration test: start session → student joins → 5 heartbeats accepted → end session → verify final attendance status and score in DB; run against Docker Compose test environment
+  - [ ] 10.1 Write full timetable-driven lifecycle integration test: materialize today's lecture sessions → student daily registration → 5 heartbeats accepted → automatic closure → verify final attendance status and score in DB; run against Docker Compose test environment
     - _Requirements: 4.1, 4.4, 6.1, 7.4, 8.5_
   - [ ] 10.2 Write WebSocket event delivery integration test: verify `SESSION_STARTED`, `NEW_TOKEN`, `HEARTBEAT_ACK`, `SESSION_ENDED` events are delivered to subscribed clients in correct order with correct payloads
     - _Requirements: 4.2, 4.4, 5.3, 7.4, 10.1, 10.3_
@@ -152,10 +152,10 @@ All original tasks from the base version are retained with their original number
 - [ ] **10.9 [NEW]** Write device binding integration test: student first login → binding created; second-device login → second binding created; third-device login → HTTP 409; admin revoke → binding revoked; login from revoked device creates new binding.
   - *Requirements: 1.11, 1.13*
 
-- [ ] **10.10 [NEW]** Write full override workflow integration test: start session → student joins → submit heartbeats → end session → verify status is ABSENT → admin POSTs override to PRESENT with justification → verify attendance.status = PRESENT → verify override record in DB → verify GET /admin/overrides returns record.
+- [ ] **10.10 [NEW]** Write full override workflow integration test: materialize lecture sessions → student daily registration → submit heartbeats → automatic closure → verify status is ABSENT → admin POSTs override to PRESENT with justification → verify attendance.status = PRESENT → verify override record in DB → verify GET /admin/overrides returns record.
   - *Requirements: 15.1, 15.2, 15.5*
 
-- [ ] **10.11 [NEW]** Write session threshold integration test: create session with `presenceThresholdPresent=75, presenceThresholdPartial=50` → student joins and sends heartbeats producing score 72 → end session → verify status is PARTIAL (not ABSENT); create another session with default thresholds → same score 72 → verify status is ABSENT.
+- [ ] **10.11 [NEW]** Write session threshold integration test: create timetable-driven lecture session with `presenceThresholdPresent=75, presenceThresholdPartial=50` → student daily registration and heartbeats produce score 72 → automatic closure → verify status is PARTIAL (not ABSENT); create another lecture session with default thresholds → same score 72 → verify status is ABSENT.
   - *Requirements: 4.11, 8.8*
 
 ---
@@ -172,21 +172,21 @@ Checkpoint — ensure all backend tests (unit, property-based, integration) pass
     - _Requirements: 6.1, 13.1_
   - [ ] 12.2 Implement the Authentication screens (Login, Register) with ViewModel state management; store JWT access token and refresh token in `EncryptedSharedPreferences`; implement token refresh interceptor in OkHttp that automatically refreshes the access token on 401 responses
     - _Requirements: 1.1, 1.2, 1.4_
-  - [ ] 12.3 Implement the Student Dashboard screen: display list of ACTIVE sessions from `GET /sessions/active`; display attendance history (last 50 sessions); handle empty state; navigate to Session Join screen on tap
+  - [ ] 12.3 Implement the Student Dashboard screen: display today's timetable and any ACTIVE lecture sessions; display attendance history (last 50 sessions); handle empty state; navigate to daily registration or current lecture details on tap
     - _Requirements: 13.1, 13.6_
-  - [ ] 12.4 Implement the Session Join flow: check Wi-Fi enabled before join; call `POST /sessions/:id/join`; on success, start the Foreground Service; display error if Wi-Fi is disabled
+  - [ ] 12.4 Implement the Daily Registration flow: check Wi-Fi enabled before registration; call `POST /daily-registration`; on success, start the Foreground Service; display error if Wi-Fi is disabled
     - _Requirements: 13.2_
-  - [ ] 12.5 Implement the Foreground Service (`AttendanceService.kt`): display persistent notification with session name and connection status (Connected / Reconnecting / Disconnected); schedule heartbeat transmission every 30 seconds; scan Wi-Fi APs (up to 20) before each heartbeat; compute `HMAC-SHA256(rollingToken + studentId + clientTimestamp)` and include in heartbeat payload; increment `sequenceNumber` per heartbeat (Correction 7)
+  - [ ] 12.5 Implement the Foreground Service (`AttendanceService.kt`): display persistent notification with lecture name and connection status (Connected / Reconnecting / Disconnected); schedule heartbeat transmission every 30 seconds; scan Wi-Fi APs (up to 20) before each heartbeat; compute `HMAC-SHA256(rollingToken + studentId + clientTimestamp)` and include in heartbeat payload; increment `sequenceNumber` per heartbeat (Correction 7)
     - _Requirements: 6.1, 6.2, 6.3, 6.4_
   - [ ] 12.6 Implement HMAC computation in the Android app (`HmacUtils.kt`): `computeHmac(token: String, studentId: String, timestamp: Long): String` using `javax.crypto.Mac` with `HmacSHA256`; the shared secret is the `rollingSessionToken` received via WebSocket (Correction 7)
     - _Requirements: 14.1_
-  - [ ] 12.7 Implement WebSocket client (`SessionWebSocketClient.kt`): connect on session join; handle `NEW_TOKEN` (update local token + sequenceNumber), `HEARTBEAT_ACK` (update UI score), `SESSION_ENDED` (stop service), `TOKEN_REFRESH` (on reconnect); implement exponential backoff reconnection: 2s, 4s, 8s, … up to 60s
+  - [ ] 12.7 Implement WebSocket client (`SessionWebSocketClient.kt`): connect after daily registration and subscribe to the current lecture; handle `NEW_TOKEN` (update local token + sequenceNumber), `HEARTBEAT_ACK` (update UI score), `SESSION_ENDED` (stop service), `TOKEN_REFRESH` (on reconnect); implement exponential backoff reconnection: 2s, 4s, 8s, … up to 60s
     - _Requirements: 6.4, 6.5, 9.4_
   - [ ] 12.8 Implement WorkManager fallback (`HeartbeatWorker.kt`): schedule a periodic Wi-Fi scan task with interval ≤ 30 seconds as a fallback when the Foreground Service is temporarily unavailable; cancel the worker when the Foreground Service resumes
     - _Requirements: 13.7_
   - [ ] 12.9 Implement the Live Session screen: display session name, elapsed time, current `Presence_Confidence_Score`, connection status; update score within 5 seconds of `HEARTBEAT_ACK`; show component breakdown (fingerprintScore, continuityScore, packetStability, joinScore)
     - _Requirements: 13.4, 13.5_
-  - [ ] 12.10 Implement runtime permission handling: request `ACCESS_FINE_LOCATION`, `ACCESS_WIFI_STATE`, `NEARBY_WIFI_DEVICES` (Android 12+) at session join time; display a descriptive error and prevent join if any required permission is denied (Correction 4)
+  - [ ] 12.10 Implement runtime permission handling: request `ACCESS_FINE_LOCATION`, `ACCESS_WIFI_STATE`, `NEARBY_WIFI_DEVICES` (Android 12+) at daily registration time; display a descriptive error and prevent monitoring if any required permission is denied (Correction 4)
     - _Requirements: 6.8_
   - [ ] 12.11 Implement heartbeat retry logic: on network error, retry once after 5 seconds; on Wi-Fi scan failure, transmit heartbeat with empty `fingerprintData` array; handle Wi-Fi disabled mid-session as a connectivity interruption applying fault tolerance rules
     - _Requirements: 6.9, 6.10, 13.3_
@@ -210,13 +210,13 @@ Checkpoint — ensure all backend tests (unit, property-based, integration) pass
     - _Requirements: 11.1_
   - [ ] 13.4 Implement the Fingerprint Registration page: form to submit CLASSROOM and NEGATIVE fingerprint samples with `sampleType`, `locationLabel`, and AP list; display registered samples grouped by type; delete all fingerprints button (Correction 5)
     - _Requirements: 2.1, 2.7_
-  - [ ] 13.5 Implement the Session Management page: start new session form with `classroomId`, `courseName`, and configurable `joinWindowMinutes` (5–15, default 5); display ACTIVE session with live attendance table; End Session button with confirmation dialog (Correction 3)
+  - [ ] 13.5 Implement the Lecture Monitoring page: show today's timetable, current lecture, and live attendance table; display automatic session state transitions and final attendance after closure; remove start/end session controls from the primary flow (Correction 3)
     - _Requirements: 11.1, 11.3, 11.4, 11.6, 11.7, 11.8_
   - [ ] 13.6 Implement the live attendance table: columns — student name, `Presence_Confidence_Score`, `Attendance_Status`, last heartbeat timestamp, score breakdown (fingerprintScore, continuityScore, packetStability, joinScore); poll `GET /sessions/:id/attendance/scores` every 5 seconds via TanStack Query; update within 5 seconds of score change
     - _Requirements: 11.2, 11.5_
-  - [ ] 13.7 Implement the configurable weights panel on the Session Management page: allow teacher to set `locationConfidence`, `sessionContinuity`, `packetStability`, `joinScore` weights (must sum to 100); call `POST /sessions/:id/weights`; display current weights (Correction 6)
+  - [ ] 13.7 Implement the configurable weights panel on the Lecture Monitoring page: allow admin or authorized teacher to view or adjust `locationConfidence`, `sessionContinuity`, `packetStability`, `joinScore` weights (must sum to 100); call `POST /sessions/:id/weights`; display current weights (Correction 6)
     - _Requirements: 8.1_
-  - [ ] 13.8 Implement WebSocket integration in the Dashboard: connect on session start; handle `SCORE_UPDATE` events to update the live attendance table without polling; handle `SESSION_ENDED` to freeze the table and show final statuses; handle `NEW_TOKEN` to display current sequence number
+  - [ ] 13.8 Implement WebSocket integration in the Dashboard: connect on automatic session activation; handle `SCORE_UPDATE` events to update the live attendance table without polling; handle `SESSION_ENDED` to freeze the table and show final statuses; handle `NEW_TOKEN` to display current sequence number
     - _Requirements: 11.2, 11.3_
   - [ ] 13.9 Implement the CSV export: on "Export CSV" click for a completed session, fetch full attendance data and generate a CSV with columns `{studentName, studentId, attendanceStatus, confidenceScore, joinTime, lastHeartbeatTime}`; trigger browser download
     - _Requirements: 11.9_
@@ -224,10 +224,10 @@ Checkpoint — ensure all backend tests (unit, property-based, integration) pass
     - _Requirements: 12.1, 12.2, 12.3, 12.4_
   - [ ]* 13.11 Write Dashboard unit tests (Vitest + React Testing Library): session list renders correctly; attendance table updates on new score data; CSV export generates correct column headers and row data; configurable weights form validates sum = 100; error message displayed on end-session failure
     - _Requirements: 11.2, 11.4, 11.5, 11.8, 11.9_
-  - [ ]* 13.12 Write Dashboard E2E tests (Playwright): full teacher flow — login → create classroom → register fingerprints (CLASSROOM + NEGATIVE) → start session with custom `joinWindowMinutes` → view live attendance → set custom weights → end session → export CSV → verify CSV content
+  - [ ]* 13.12 Write Dashboard E2E tests (Playwright): full teacher flow — login → create classroom → upload timetable → register fingerprints (CLASSROOM + NEGATIVE) → view today's lecture session → monitor live attendance → set custom weights → export CSV → verify CSV content
     - _Requirements: 11.1, 11.2, 11.3, 11.5, 11.9, 12.1_
 
-- [ ] **13.13 [NEW]** Update the Session Management page: add `presenceThresholdPresent` (default 85, range 70–100) and `presenceThresholdPartial` (default 60, range 40–84) fields to the session creation form; validate `partial < present` client-side; display session thresholds in the session detail view.
+- [ ] **13.13 [NEW]** Update the Lecture Monitoring page: display `presenceThresholdPresent` (default 85, range 70–100) and `presenceThresholdPartial` (default 60, range 40–84) as read-only session policy fields; validate `partial < present` in any administrative edit flow; display session thresholds in the session detail view.
   - *Requirements: 4.11, 11.10*
 
 - [ ] **13.14 [NEW]** Implement the Admin Override view: add a protected `/admin` route (visible only to users with role = ADMIN in JWT); display session selector; for each selected session, show student attendance records with automated status, confidence score, and an "Override" button; implement the override modal (overrideStatus dropdown + justification textarea); call `POST /admin/sessions/:id/attendance/:studentId/override`; refresh the record on success; display the override indicator and original automated status.
@@ -297,3 +297,571 @@ New tasks and their waves:
 - No tasks from the friend version's IMU, GPS, or BLE pipelines are incorporated.
 - The override service (Phase 7B) can be implemented in parallel with Phase 12 (Android) or Phase 13 (Dashboard) since it has no dependencies on either.
 - Device fingerprint logic (Task 12.15) is a prerequisite for heartbeat validation task 6.1 update — ensure 12.15 is complete before updating 6.1 in practice.
+
+
+
+
+
+# Smart Attendance Registry - Updated Development Roadmap (Post Professor Review)
+
+---
+
+# Current Stable Checkpoint
+
+Rollback Target:
+
+**Phase 10.2**
+
+Reason:
+
+* Stable Android implementation
+* Stable backend
+* Wi-Fi fingerprint collection validated
+* Rolling tokens validated
+* Heartbeats validated
+* Phase 11A (Teacher Reference Fingerprint Storage) paused until new architecture is implemented.
+
+---
+
+# Phase 1 – Database Foundation
+
+## Status
+
+✅ Completed
+
+### Completed
+
+* Sessions table
+* Attendance table
+* Heartbeats table
+* Refresh Tokens
+* Presence Thresholds
+* Indexes
+* PostgreSQL
+* NeonDB
+* PostGIS
+
+### Additional Changes Required
+
+Add timetable support.
+
+New tables:
+
+* Timetable
+* Classroom Schedule
+* Academic Calendar (optional)
+
+Purpose:
+
+Allow automatic session scheduling instead of manual teacher session creation.
+
+Completion:
+
+95%
+
+---
+
+# Phase 2 – Authentication & Device Security
+
+## Status
+
+Partially Completed
+
+### Completed
+
+* JWT Authentication
+* Refresh Tokens
+* Refresh Rotation
+* Login
+* Logout
+* Account Lockout
+
+### Device Binding
+
+Current:
+
+⚠ Basic HTTP fingerprint
+
+Problem:
+
+Current implementation fingerprints request properties.
+
+Different Android devices using:
+
+* same app
+* same OkHttp version
+* same network
+
+can generate identical hashes.
+
+### Updated Requirement
+
+Device fingerprint must include:
+
+* Android ID
+* Device Manufacturer
+* Device Model
+* Device Brand
+* Android Version
+* Enrollment Identifier
+* App Installation Identifier
+* Secure Device UUID
+
+Purpose:
+
+* Prevent account sharing
+* Detect device mismatch
+* Improve enrollment security
+
+Completion:
+
+90%
+
+---
+
+# Phase 3 – Timetable Engine (NEW)
+
+Status:
+
+Not Started
+
+Objective:
+
+Completely automate session creation.
+
+Features:
+
+* Weekly timetable upload
+* Automatic lecture generation
+* Classroom allocation
+* Faculty assignment
+* Lecture timing validation
+* Automatic daily schedule creation
+
+Backend APIs:
+
+* Upload Timetable
+* Get Today's Schedule
+* Generate Daily Sessions
+
+Database:
+
+* timetable
+* timetable_entries
+
+Completion:
+
+0%
+
+---
+
+# Phase 4 – Automatic Session Lifecycle
+
+Status:
+
+Needs Redesign
+
+Old Design:
+
+Teacher manually starts session.
+
+New Design:
+
+Lecture sessions are materialized from the timetable and automatically start only if BOTH conditions are true:
+
+1. Current time is within scheduled lecture.
+2. Teacher's registered device is detected inside the classroom.
+
+Session automatically ends:
+
+* Lecture end time reached
+  OR
+* Teacher leaves classroom beyond configurable timeout.
+
+Completion:
+
+60%
+
+---
+
+# Phase 5 – Daily Student Registration
+
+(New Phase)
+
+Status:
+
+Not Started
+
+Objective:
+
+Remove per-session joining.
+
+Student registers once at beginning of day.
+
+System automatically monitors every scheduled lecture.
+
+Features:
+
+* Daily Registration
+* Resume after lunch
+* Resume after short break
+* Resume after Wi-Fi reconnect
+* No duplicate registration
+
+Completion:
+
+0%
+
+---
+
+# Phase 6 – Rolling Token Engine
+
+Status
+
+Completed
+
+Completed
+
+* Initial token generation
+* Rotation
+* Validation
+* Replay protection
+
+Future Improvement
+
+Tokens automatically generated only for active timetable sessions.
+
+Completion:
+
+100%
+
+---
+
+# Phase 7 – Heartbeat Synchronization
+
+Status
+
+Mostly Completed
+
+Completed
+
+* Foreground Service
+* Sequence Numbers
+* Heartbeats
+* Heartbeat Storage
+
+To Improve
+
+Adaptive heartbeat frequency.
+
+Current:
+
+15 seconds
+
+Future:
+
+Normal monitoring
+
+* 60 seconds
+
+Suspicious situations
+
+* 15 seconds
+
+Purpose:
+
+Reduce battery consumption.
+
+Completion:
+
+95%
+
+---
+
+# Phase 8 – Wi-Fi Fingerprinting Engine
+
+Status
+
+Partially Completed
+
+Completed
+
+* Student fingerprint capture
+* Nearby AP collection
+* JSON storage
+
+To Implement
+
+Teacher Reference Fingerprint
+
+Fingerprint similarity engine
+
+BSSID weighted comparison
+
+RSSI similarity
+
+Distance calculation
+
+Reference filtering
+
+Location classification
+
+Negative samples
+
+k-NN similarity
+
+Multi-factor matching
+
+Completion:
+
+70%
+
+---
+
+# Phase 9 – Attendance Confidence Engine
+
+Status
+
+Partially Completed
+
+Completed
+
+Join Score
+
+To Implement
+
+Final Confidence Score
+
+Confidence Formula
+
+Dynamic Weights
+
+Teacher Reference Match
+
+Heartbeat Continuity
+
+Sequence Stability
+
+Motion Correlation
+
+BLE Proximity (optional enhancement)
+
+Attendance Finalization
+
+Completion:
+
+35%
+
+---
+
+# Phase 10 – Attendance Monitoring Logic
+
+Status
+
+New Phase
+
+Features
+
+Late Arrival Detection
+
+Lunch Break Resume
+
+Half-Day Leave
+
+Single Lecture Bunk Detection
+
+Automatic Wi-Fi Reconnection
+
+Continuous Monitoring
+
+No Re-registration
+
+Completion
+
+0%
+
+---
+
+# Phase 11 – Teacher Dashboard
+
+Status
+
+Not Started
+
+Updated Scope
+
+Teacher Login
+
+Today's Timetable
+
+Current Lecture
+
+Automatic Session Status
+
+Live Students
+
+Teacher Reference Fingerprint
+
+Attendance Monitor
+
+Current Attendance
+
+Historical Reports
+
+CSV Export
+
+Analytics
+
+Manual Override
+
+Weight Configuration
+
+Timetable Validation
+
+Teacher Device Status
+
+Lecture Monitoring
+
+Completion
+
+0%
+
+---
+
+# Phase 12 – Student Android Application
+
+Status
+
+Mostly Completed
+
+Completed
+
+* Login
+* Dashboard
+* Today's Timetable
+* Daily Registration
+* Foreground Service
+* Wi-Fi Fingerprinting
+* Heartbeats
+* Runtime Permissions
+
+To Improve
+
+Attendance History
+
+Live Attendance Screen
+
+Current Monitoring Screen
+
+WebSocket Token Updates
+
+WorkManager
+
+Retry Logic
+
+HMAC Utility
+
+Battery Optimization
+
+Android Documentation
+
+Property Tests
+
+Automatic Lecture Sync
+
+Completion
+
+80%
+
+---
+
+# Phase 13 – Testing & Validation
+
+Status
+
+Partially Completed
+
+Completed
+
+Manual Testing
+
+* Login
+* Daily Registration
+* Heartbeats
+* Rolling Tokens
+* Wi-Fi Fingerprints
+* Automatic Activation
+* Automatic Closure
+
+Remaining
+
+Integration Tests
+
+Property Tests
+
+Load Testing
+
+Battery Tests
+
+Network Failure Tests
+
+Session Recovery Tests
+
+Timetable Validation Tests
+
+Completion
+
+35%
+
+---
+
+# Updated Development Order
+
+The project shall now proceed in the following order:
+
+1. Freeze Phase 10.2
+2. Update Functional Requirements
+3. Redesign Database for Timetable
+4. Implement Timetable Engine
+5. Implement Automatic Session Lifecycle
+6. Implement Daily Student Registration
+7. Improve Device Fingerprinting
+8. Implement Teacher Reference Fingerprints
+9. Implement Fingerprint Similarity Engine
+10. Implement Confidence Engine
+11. Implement Attendance Monitoring Logic
+12. Build Teacher Dashboard
+13. Polish Student Dashboard
+14. Complete Testing & Documentation
+
+This revised roadmap reflects the updated architecture discussed during the professor review and replaces the earlier manual teacher-session workflow with a fully automated timetable-driven attendance system.
+
+# Task Migration Summary
+
+## Updated Tasks
+
+- Phase 4 now describes timetable-driven activation and automatic closure instead of manual teacher session control.
+- Phase 11 now centers on timetable oversight, lecture monitoring, and automatic attendance visibility.
+- Phase 12 now centers on daily registration and continuous monitoring instead of session join.
+- Phase 13 testing now verifies automatic activation, closure, and timetable-driven flows.
+
+## Deprecated Tasks
+
+- Manual session creation, manual session start, manual session end, and per-session student join tasks are deprecated.
+- Any task that depends on `POST /sessions`, `POST /sessions/:id/join`, or teacher-initiated session termination should be treated as legacy-only.
+
+## Renamed Tasks
+
+- Session Join has been renamed to Daily Registration or Monitoring Resume where appropriate.
+- Session Management has been renamed to Lecture Monitoring or Timetable Oversight where appropriate.
+
+## New Tasks Added
+
+- Timetable validation coverage.
+- Teacher device status visibility.
+- Automatic lecture synchronization support.
+- Automatic activation and closure validation tests.
+
+## Removed Tasks
+
+- None removed; task numbering was preserved to maintain traceability.

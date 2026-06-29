@@ -73,9 +73,10 @@ sequenceDiagram
 
     T->>B: POST /auth/login
     B-->>T: accessToken, refreshToken
-    T->>B: POST /sessions {classroomId, courseName, joinWindowMinutes?, presenceThresholdPresent?, presenceThresholdPartial?}
-    B->>DB: INSERT session (ACTIVE, thresholds stored)
-    B-->>T: {sessionId}
+    T->>B: POST /timetable/uploads
+    B->>DB: INSERT timetable upload and timetable entries
+    B->>B: Materialize lecture sessions for today's schedule
+    B-->>T: {sessionIds}
     B-)A: WS: SESSION_STARTED
 
     loop Every 30 seconds
@@ -94,8 +95,8 @@ sequenceDiagram
         B->>T: SCORE_UPDATE(studentId, score, breakdown)
     end
 
-    T->>B: POST /sessions/:id/end
-    B->>DB: UPDATE session (CLOSED), final score using session thresholds
+    T->>B: POST /sessions/:id/close
+    B->>DB: UPDATE lecture session (CLOSED), final score using session thresholds
     B-)A: WS: SESSION_ENDED
     B-)T: WS: SESSION_ENDED
 ```
@@ -347,7 +348,7 @@ async function assignAttendanceStatus(sessionId, studentId, score) {
 
 ### New Integration Tests
 
-- Full override flow: Create session → join → send heartbeats → end session → verify ABSENT → admin overrides to PRESENT → verify attendance.status = PRESENT → verify override record in DB.
+- Full override flow: Materialize lecture session → daily registration → send heartbeats → automatic closure → verify ABSENT → admin overrides to PRESENT → verify attendance.status = PRESENT → verify override record in DB.
 - Device binding flow: Student logs in from device A → binding created → logs in from device B → second binding created → logs in from device C → HTTP 409.
 
 
