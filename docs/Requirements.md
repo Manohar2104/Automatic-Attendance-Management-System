@@ -25,7 +25,7 @@ The system has four components:
 *(All original terms retained. New terms added below.)*
 
 - **Device_Binding**: A record in the `device_bindings` table linking a `deviceFingerprint` to a `studentId`, created on first login from a new device.
-- **deviceFingerprint**: A string derived from stable device properties (Android ID) used to identify a specific physical device.
+- **deviceFingerprint**: A stable Android-specific device identifier used to identify a specific enrolled device without exposing raw hardware identifiers.
 - **Presence_Threshold**: Session-level configuration specifying the minimum Presence_Confidence_Score for PRESENT status (default 85) and PARTIAL status (default 60), stored in `sessions.presence_threshold_present` and `sessions.presence_threshold_partial`.
 - **Admin**: A user with role ADMIN who can review flagged records and issue attendance overrides.
 - **Override_Log**: An audit record in the `attendance_overrides` table capturing every manual attendance change.
@@ -56,33 +56,50 @@ The system has four components:
 
 ---
 
-### Requirement 2: Classroom Wi-Fi Fingerprint Registration
+### Requirement 2: Teacher Reference Fingerprint Capture
 
-**User Story:** As a Teacher, I want to register the Wi-Fi fingerprint of a classroom, so that the system can later determine whether a student is physically inside that classroom.
+**User Story:** As the system, I want to automatically capture the teacher's classroom Wi-Fi environment when a lecture becomes ACTIVE, so that each lecture instance has its own reference fingerprint without manual teacher interaction.
 
 #### Acceptance Criteria
 
-1. WHEN a Teacher submits a fingerprint registration request containing {roomId, list of {BSSID, SSID, RSSI}}, THE Fingerprint_Engine SHALL persist each access point record linked to the roomId in the Fingerprints table; each SSID SHALL be no longer than 32 characters (per IEEE 802.11).
-2. THE Fingerprint_Engine SHALL accept a minimum of 3 and a maximum of 50 access point entries per fingerprint registration request.
-3. WHEN multiple fingerprint samples are registered for the same roomId, THE Fingerprint_Engine SHALL store each sample as a JSONB RSSI fingerprint vector to support sample-level classification.
-4. IF a submitted BSSID does not conform to the MAC address format (XX:XX:XX:XX:XX:XX), THEN THE Fingerprint_Engine SHALL return an HTTP 400 response listing the rejected malformed entries.
-5. THE Fingerprint_Engine SHALL persist all access point records whose BSSID and RSSI values pass validation.
+1. WHEN a lecture becomes ACTIVE, THE Backend SHALL request the teacher's registered Android device to capture the nearby Wi-Fi environment and SHALL persist the captured access point data as the reference fingerprint for that lecture instance.
+2. THE Fingerprint_Engine SHALL capture the teacher reference fingerprint without requiring manual teacher interaction.
+3. THE Fingerprint_Engine SHALL store one reference fingerprint per lecture instance, and recapturing the reference fingerprint for the same lecture instance SHALL replace the previous reference fingerprint for that lecture.
+4. THE captured teacher reference fingerprint SHALL contain valid Wi-Fi access point entries with BSSID, SSID, and RSSI values, and each SSID SHALL be no longer than 32 characters (per IEEE 802.11).
+5. IF a submitted BSSID does not conform to the MAC address format (XX:XX:XX:XX:XX:XX), THEN THE Fingerprint_Engine SHALL return an HTTP 400 response listing the rejected malformed entries.
 6. IF a submitted RSSI value is outside the range −100 dBm to 0 dBm, THEN THE Fingerprint_Engine SHALL return an HTTP 400 response listing the rejected out-of-range entries.
-7. WHEN a Teacher requests deletion of a classroom fingerprint, THE Fingerprint_Engine SHALL remove all fingerprint records associated with that roomId; IF the roomId does not exist, THEN THE Fingerprint_Engine SHALL return an HTTP 404 response.
+7. WHEN the teacher reference fingerprint is captured, THE Fingerprint_Engine SHALL persist the fingerprint data linked to the active lecture instance so that later fingerprint comparison uses the correct lecture-specific reference.
 
 ---
 
 ### Requirement 3: Wi-Fi Fingerprint Classification
 
-**User Story:** As the system, I want to classify a student's current Wi-Fi scan against the registered classroom fingerprint, so that I can determine whether the student is physically inside the classroom.
+**User Story:** As the system, I want to classify a student's current Wi-Fi scan against the teacher reference fingerprint for the currently active lecture instance, so that I can determine whether the student is physically inside the classroom.
 
 #### Acceptance Criteria
 
-1. WHEN the Heartbeat_Processor receives fingerprintData from a heartbeat, THE Fingerprint_Engine SHALL compute the Euclidean distance between the incoming RSSI vector and each stored fingerprint sample vector for the session's roomId.
+1. WHEN the Heartbeat_Processor receives fingerprintData from a heartbeat, THE Fingerprint_Engine SHALL retrieve the teacher reference fingerprint for the currently active lecture instance and SHALL compute the Euclidean distance between the incoming RSSI vector and the stored reference fingerprint samples.
 2. IF the incoming fingerprintData is null or empty, THEN THE Fingerprint_Engine SHALL return a fingerprintScore of 0 and a classification of OUTSIDE_CLASSROOM without invoking weighted k-NN aggregation.
 3. AFTER sorting candidates by ascending Euclidean distance, THE Fingerprint_Engine SHALL apply Soft Range Limited k-NN using an additive threshold rule `distance <= bestDistance + SOFT_RANGE_THRESHOLD`, and SHALL retain only the neighbors within that soft range prior to weighted k-NN scoring.
 4. THE Fingerprint_Engine SHALL derive a fingerprintScore in the range 0–100 using weighted k-NN confidence aggregation over retained neighbors, incorporating both POSITIVE and NEGATIVE fingerprints, with NEGATIVE samples reducing confidence.
-5. THE Fingerprint_Engine SHALL complete classification within 500 milliseconds of receiving the fingerprint data.
+5. IF the teacher reference fingerprint for the active lecture instance is missing, THEN THE Fingerprint_Engine SHALL return a fingerprintScore of 0 and SHALL classify the scan as OUTSIDE_CLASSROOM while logging the missing-reference condition for audit.
+6. THE Fingerprint_Engine SHALL complete classification within 500 milliseconds of receiving the fingerprint data.
+7. THE Fingerprint_Engine SHALL preserve the weighted matching structure so that future weighted-matching refinements can be introduced without changing the current classification contract.
+
+### Requirement 1A: Device Fingerprint Generation
+
+**User Story:** As the system, I want the Android application to generate a stable device fingerprint, so that device binding and mismatch detection can operate without exposing raw hardware identifiers.
+
+#### Acceptance Criteria
+
+1. THE Android_App SHALL generate a stable device fingerprint derived from Android-specific characteristics.
+2. THE Android_App SHALL NOT depend on HTTP request headers or networking libraries to generate the device fingerprint.
+3. THE generated fingerprint SHALL uniquely identify an enrolled Android device for the purpose of device binding verification.
+4. THE generated fingerprint SHALL support device mismatch detection and device binding verification.
+5. THE Android_App SHALL NOT store personally identifiable hardware identifiers directly.
+6. THE generated fingerprint SHALL remain stable across normal application restarts.
+7. IF the device is reinstalled or replaced, THEN THE system MAY require re-enrollment according to system policy.
+8. THE device fingerprint SHALL be suitable for inclusion in JWT payloads and heartbeat validation without exposing raw hardware identifiers.
 
 ---
 
@@ -125,13 +142,13 @@ The system has four components:
 
 #### Acceptance Criteria
 
-1. WHEN a Student joins an ACTIVE session, THE Foreground_Service SHALL begin transmitting a Heartbeat packet every 30 seconds containing {studentId, sessionId, sequenceNumber, token, fingerprintData, timestamp}.
+1. WHEN a Student completes Daily Registration, THE Foreground_Service SHALL begin transmitting Heartbeat packets using the adaptive heartbeat strategy defined in FR-14, with a normal interval of 60 seconds and a suspicious interval of 15 seconds when monitoring conditions indicate instability, containing {studentId, sessionId, sequenceNumber, token, fingerprintData, timestamp}.
 2. WHEN the Foreground_Service is about to transmit a heartbeat, THE Foreground_Service SHALL scan available Wi-Fi access points and SHALL include up to a maximum of 20 access points as fingerprintData in the Heartbeat.
 3. THE Foreground_Service SHALL display a persistent notification indicating the active session name and one of the following connection status values: Connected, Reconnecting, or Disconnected, so that the Android OS does not terminate the service.
 4. WHEN the Android_App receives a NEW_TOKEN WebSocket event, THE Foreground_Service SHALL update its local token and sequenceNumber before the next heartbeat transmission.
 5. IF the WebSocket connection is lost, THEN THE Foreground_Service SHALL attempt reconnection using exponential backoff starting at 2 seconds, doubling up to a maximum of 60 seconds, and SHALL continue retrying indefinitely until the session ends.
-6. WHEN the session ends OR IF the Student explicitly leaves the session, THE Foreground_Service SHALL cease heartbeat transmission; resource release may occur as a separate operation after heartbeat transmission has ceased.
-7. IF the Student explicitly leaves the session, THEN THE Foreground_Service SHALL cease heartbeat transmission immediately, regardless of session state; resource release may occur as a separate operation after heartbeat transmission has ceased.
+6. WHEN the lecture ends OR IF Daily Monitoring is stopped, THE Foreground_Service SHALL cease heartbeat transmission; resource release may occur as a separate operation after heartbeat transmission has ceased.
+7. IF Daily Monitoring is stopped explicitly, THEN THE Foreground_Service SHALL cease heartbeat transmission immediately, regardless of session state; resource release may occur as a separate operation after heartbeat transmission has ceased.
 8. THE Android_App SHALL request the ACCESS_WIFI_STATE and CHANGE_WIFI_STATE permissions at runtime and SHALL inform the Student if permissions are denied, preventing daily registration or lecture monitoring.
 9. IF a heartbeat transmission fails due to a network error, THEN THE Foreground_Service SHALL retry the transmission once after 5 seconds before discarding the heartbeat and continuing with the next scheduled transmission.
 10. IF the Wi-Fi scan fails or returns no results, THEN THE Foreground_Service SHALL transmit the heartbeat with an empty `fingerprintData` array rather than skipping the transmission.
@@ -177,6 +194,7 @@ The system has four components:
 6. THE Confidence_Engine SHALL expose the current score and component breakdown (fingerprintScore, continuityScore, packetStability, joinScore) via a REST endpoint so that the Dashboard can display confidence metrics no older than 5 seconds.
 7. FOR ALL valid combinations of component scores within their defined ranges, THE Confidence_Engine SHALL produce a Presence_Confidence_Score in [0, 100].
 8. WHEN the session ends, THE Confidence_Engine SHALL use the session-specific `presenceThresholdPresent` and `presenceThresholdPartial` values (from Sessions table) rather than hardcoded defaults when assigning Attendance_Status.
+9. Motion Correlation, BLE Proximity, and adaptive heartbeat intervals are future enhancements: they may influence monitoring behavior in later phases, but they SHALL NOT change the current confidence formula defined above.
 
 ---
 
@@ -189,9 +207,9 @@ The system has four components:
 1. THE Fault_Tolerance_Module SHALL allow up to and including exactly 3 consecutive missed heartbeats before changing the student's session state; a gap of exactly 3 missed heartbeats is classified as recoverable.
 2. WHEN a Student's heartbeat resumes after a gap of 3 or fewer missed heartbeats, THE Fault_Tolerance_Module SHALL treat the gap as a recoverable interruption and SHALL apply zero contribution (no score) for the missed slots without any additional deduction to the continuityScore; the continuityScore MAY change during the recovery period due to other factors such as new heartbeats being accepted or rejected.
 3. THE Fault_Tolerance_Module SHALL maintain a sliding synchronization window of the last 10 heartbeat slots to compute continuityScore; at session start, before 10 slots have elapsed, the window SHALL cover only the slots that have occurred so far.
-4. WHEN a Student reconnects after a WebSocket disconnection, THE Backend SHALL issue a token refresh containing the current Rolling_Token and sequenceNumber so that the Student can resume heartbeat transmission without rejoining the session.
+4. WHEN a Student reconnects after a WebSocket disconnection, THE Backend SHALL issue a token refresh containing the current Rolling_Token and sequenceNumber so that the Student can resume Daily Monitoring without another registration.
 5. IF a Student misses more than 10 consecutive heartbeats, THEN THE Fault_Tolerance_Module SHALL mark the Student's session state as DISCONNECTED; heartbeats received while the student is in DISCONNECTED state SHALL be rejected with an HTTP 403 response.
-6. WHEN a Student's session state is DISCONNECTED, THE Student SHALL explicitly rejoin the session by sending a session-join request before heartbeat processing resumes.
+6. WHEN a Student's session state is DISCONNECTED, THE Backend SHALL automatically resume Daily Monitoring after the Student reconnects and the existing daily registration remains valid; no additional registration request SHALL be required.
 7. THE Fault_Tolerance_Module SHALL log all disconnection events, reconnection events, and gap durations in the Heartbeats table, including the event timestamp, for post-session analysis.
 
 ---
@@ -204,7 +222,7 @@ The system has four components:
 
 1. THE WebSocket_Server SHALL support the following server-to-client event types: SESSION_STARTED, SESSION_ENDED, NEW_TOKEN, HEARTBEAT_ACK, and SESSION_TERMINATED.
 2. WHEN a client connects to the WebSocket_Server, THE WebSocket_Server SHALL require the client to authenticate by sending a valid JWT within 10 seconds of connection establishment; IF authentication is not received within 10 seconds, THEN THE WebSocket_Server SHALL close the connection.
-3. THE WebSocket_Server SHALL broadcast NEW_TOKEN events only to clients that have successfully authenticated and are subscribed to the specific session for which the token was generated; subscription is established via a client-sent SUBSCRIBE message containing a session ID after successful authentication; IF no clients are currently subscribed to that session, THEN THE WebSocket_Server SHALL skip sending the broadcast.
+3. THE WebSocket_Server SHALL broadcast NEW_TOKEN events only to clients that have successfully authenticated and are subscribed to today's lecture stream for which the token was generated; subscription is established via a client-sent SUBSCRIBE message containing the relevant session ID after successful authentication; IF no clients are currently subscribed to that lecture stream, THEN THE WebSocket_Server SHALL skip sending the broadcast.
 4. WHEN the WebSocket_Server detects that a client connection has been idle for more than 90 seconds without a heartbeat or ping, THE WebSocket_Server SHALL close the connection and notify the Fault_Tolerance_Module with the client identifier and disconnect reason.
 5. THE WebSocket_Server SHALL support a minimum of 500 concurrent client connections without degradation of message delivery latency beyond 200 milliseconds under that load condition.
 6. THE WebSocket_Server SHALL implement a ping/pong keepalive mechanism with a 30-second interval to detect stale connections; IF a pong response is not received within 10 seconds of a ping, THEN THE WebSocket_Server SHALL close the connection.
@@ -619,9 +637,9 @@ The student shall NOT perform daily registration again.
 
 ## Requirement
 
-When a session becomes active:
+When a lecture becomes active:
 
-The teacher device shall automatically capture the classroom Wi-Fi environment.
+The backend shall request the teacher's registered Android device to capture the nearby Wi-Fi environment.
 
 Captured data:
 
@@ -631,13 +649,15 @@ Captured data:
 
 The captured fingerprint shall become the reference fingerprint for that lecture session.
 
+Recapturing the reference fingerprint for the same lecture session shall replace the previous reference fingerprint.
+
 ---
 
 # FR-11 Student Wi-Fi Fingerprint Collection
 
 ## Requirement
 
-Student devices shall periodically collect nearby Wi-Fi access points.
+Student devices shall periodically collect nearby Wi-Fi access points during Daily Monitoring.
 
 Collected attributes:
 
@@ -645,7 +665,7 @@ Collected attributes:
 * SSID
 * RSSI
 
-These fingerprints shall be compared against the teacher reference environment.
+These fingerprints shall be compared against the teacher reference fingerprint captured for the currently active lecture instance.
 
 ---
 
