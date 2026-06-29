@@ -5,6 +5,7 @@ import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendanceRoutes';
 import heartbeatRoutes from './routes/heartbeatRoutes';
 import fingerprintRoutes from './routes/fingerprintRoutes';
+import timetableRoutes from './routes/timetableRoutes';
 import sessionFingerprintRoutes from './routes/sessionFingerprintRoutes';
 import sessionRoutes from './routes/sessionRoutes';
 
@@ -17,6 +18,7 @@ app.use('/auth', authRoutes);
 app.use('/attendance', attendanceRoutes);
 app.use('/heartbeats', heartbeatRoutes);
 app.use('/fingerprints', fingerprintRoutes);
+app.use('/', timetableRoutes);
 app.use('/sessions', sessionFingerprintRoutes);
 app.use('/sessions', sessionRoutes);
 
