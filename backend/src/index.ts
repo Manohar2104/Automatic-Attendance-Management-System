@@ -8,6 +8,7 @@ import heartbeatRoutes from './routes/heartbeatRoutes';
 import fingerprintRoutes from './routes/fingerprintRoutes';
 import timetableRoutes from './routes/timetableRoutes';
 import lectureMaterializationRoutes from './routes/lectureMaterializationRoutes';
+import lectureActivationRoutes from './routes/lectureActivationRoutes';
 import sessionFingerprintRoutes from './routes/sessionFingerprintRoutes';
 import sessionRoutes from './routes/sessionRoutes';
 
@@ -22,6 +23,7 @@ app.use('/', dailyRegistrationRoutes);
 app.use('/heartbeats', heartbeatRoutes);
 app.use('/fingerprints', fingerprintRoutes);
 app.use('/', lectureMaterializationRoutes);
+app.use('/', lectureActivationRoutes);
 app.use('/', timetableRoutes);
 app.use('/sessions', sessionFingerprintRoutes);
 app.use('/sessions', sessionRoutes);
