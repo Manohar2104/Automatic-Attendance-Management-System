@@ -32,6 +32,10 @@ async function createTeacherToken(teacherId: string) {
   return signAccessToken(teacherId, ['TEACHER']);
 }
 
+async function createStudentToken(studentId: string) {
+  return signAccessToken(studentId, ['STUDENT']);
+}
+
 describe('session fingerprint routes', () => {
   beforeEach(() => {
     mockedPool.connect.mockReset();
@@ -107,6 +111,17 @@ describe('session fingerprint routes', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('INVALID_FINGERPRINT_PAYLOAD');
+  });
+
+  it('rejects non-teacher access', async () => {
+    const { token } = await createStudentToken('student-1');
+    const res = await request(makeApp())
+      .post('/sessions/session-1/fingerprint')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ fingerprint_data: [{ bssid: 'AA:BB:CC:DD:EE:FF', rssi: -55 }] });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('insufficient_role');
   });
 
   it('rejects closed sessions', async () => {

@@ -6,7 +6,10 @@ import {
   TeacherPresenceProvider,
   type TeacherPresenceResult
 } from './teacherPresenceProvider';
-import { triggerTeacherReferenceCapture } from './teacherReferenceCapture';
+import {
+  triggerTeacherReferenceCapture,
+  type TeacherReferenceCaptureTrigger
+} from './teacherReferenceCapture';
 
 type LectureActivationRow = {
   lectureInstanceId: string;
@@ -44,7 +47,7 @@ type EngineResult = LectureActivationSummary & {
 type LectureActivationDependencies = {
   teacherPresenceProvider?: TeacherPresenceProvider;
   now?: Date;
-  triggerTeacherReferenceCapture?: typeof triggerTeacherReferenceCapture;
+  teacherReferenceCaptureTrigger?: TeacherReferenceCaptureTrigger;
 };
 
 const ACTIVATION_REASON = 'TIMETABLE_AND_TEACHER_PRESENCE_MATCH';
@@ -227,7 +230,9 @@ function summarizeRows(academicDate: string, rows: LectureActivationRow[], evalu
 
 function createEngine(dependencies: LectureActivationDependencies = {}) {
   const teacherPresenceProvider = dependencies.teacherPresenceProvider ?? createDefaultTeacherPresenceProvider();
-  const captureTrigger = dependencies.triggerTeacherReferenceCapture ?? triggerTeacherReferenceCapture;
+  const captureTrigger = dependencies.teacherReferenceCaptureTrigger ?? {
+    requestTeacherReferenceCapture: triggerTeacherReferenceCapture
+  };
 
   function resolveNow() {
     return dependencies.now ?? new Date();
@@ -340,13 +345,17 @@ function createEngine(dependencies: LectureActivationDependencies = {}) {
       row.sessionStatus = 'ACTIVE';
       activatedCount += 1;
 
-      await captureTrigger({
+      const captureResult = await captureTrigger.requestTeacherReferenceCapture({
         teacherId: row.teacherId,
         classroomId: row.classroomId,
         lectureInstanceId: row.lectureInstanceId,
         sessionId,
         timestamp: evaluatedAt
       });
+
+      if (captureResult?.accepted === false) {
+        continue;
+      }
     }
 
     return { activatedCount, missedLectureCount };

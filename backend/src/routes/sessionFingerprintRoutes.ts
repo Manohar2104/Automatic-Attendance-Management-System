@@ -17,8 +17,22 @@ function getTeacherId(req: express.Request) {
   return (req as any).user?.id as string | undefined;
 }
 
+function requireTeacherRole(req: express.Request, res: express.Response) {
+  const roles = (req as any).user?.roles || [];
+  if (!roles.includes('TEACHER')) {
+    res.status(403).json({ error: 'insufficient_role' });
+    return false;
+  }
+
+  return true;
+}
+
 router.post('/:id/fingerprint', authMiddleware, async (req, res) => {
   try {
+    if (!requireTeacherRole(req, res)) {
+      return;
+    }
+
     const teacherId = getTeacherId(req);
     const result = await storeSessionReferenceFingerprint(
       req.params.id,
@@ -34,6 +48,10 @@ router.post('/:id/fingerprint', authMiddleware, async (req, res) => {
 
 router.get('/:id/fingerprint', authMiddleware, async (req, res) => {
   try {
+    if (!requireTeacherRole(req, res)) {
+      return;
+    }
+
     const teacherId = getTeacherId(req);
     const result = await getSessionReferenceFingerprint(req.params.id, teacherId || '');
 

@@ -10,7 +10,14 @@ jest.mock('../src/config/db', () => {
 });
 
 jest.mock('../src/services/teacherReferenceCapture', () => ({
-  triggerTeacherReferenceCapture: jest.fn(async (input: unknown) => ({ triggered: true, input }))
+  triggerTeacherReferenceCapture: jest.fn(async (input: any) => ({
+    ...input,
+    accepted: true,
+    provider: 'TestTeacherCaptureTrigger',
+    requestId: 'capture-request-1',
+    deliveryStatus: 'ACKNOWLEDGED',
+    message: 'CAPTURE_REQUESTED'
+  }))
 }));
 
 import { pool } from '../src/config/db';

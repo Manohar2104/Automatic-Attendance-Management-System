@@ -60,6 +60,10 @@ export function validateReferenceFingerprintData(fingerprintData: unknown): Refe
       throw createHttpError('INVALID_RSSI_RANGE', 400);
     }
 
+    if (typeof ssid === 'string' && ssid.length > 32) {
+      throw createHttpError('INVALID_SSID_LENGTH', 400);
+    }
+
     return {
       bssid,
       ssid: ssid && ssid.length > 0 ? ssid : null,
