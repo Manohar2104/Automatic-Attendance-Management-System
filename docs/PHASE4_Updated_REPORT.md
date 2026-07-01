@@ -65,3 +65,126 @@ Refinement-only updates were applied without changing scheduler, lecture activat
 - Fingerprint normalization is now centralized before strategy execution (lowercase BSSID, duplicate removal, malformed/null filtering, deterministic ordering).
 - Jaccard remains pure set overlap on normalized BSSID sets only (no RSSI/frequency/channel weighting).
 - Similarity thresholds remain centralized through `projectConstants` and the threshold engine.
+
+## 7. Phase 4.2 Completion (Frozen)
+
+Phase 4.2 delivered the teacher reference capture chain using existing components and persistence without introducing parallel services:
+- TeacherReferenceCaptureTrigger
+- TeacherReferenceCaptureService
+- TeacherReferenceCollector
+- WifiReferenceCollector
+- BLEReferenceCollector placeholder
+- TeacherCaptureLifecycle
+- Existing fingerprint pipeline reuse
+- Existing backend persistence reuse
+- Existing Android WifiScanManager reuse
+- Plugin-based collector architecture
+
+Phase 4.2 freeze clarifications:
+- BLE remains registered but disabled in the collector coordinator.
+- Motion Correlation was intentionally deferred.
+
+Status:
+- Phase 4.2: COMPLETE AND FROZEN
+
+## 8. Phase 4.3 Completion (Frozen)
+
+Phase 4.3 delivered Wi-Fi similarity classification as a separate architecture slice (no attendance decisions):
+- ReferenceFingerprintLoader
+- StudentFingerprintLoader
+- WifiSimilarityEngine
+- SimilarityThresholdEngine
+- SessionWifiSimilarityService
+- JaccardSimilarityStrategy
+- Strategy Pattern
+- Immutable SimilarityResult
+- Fingerprint normalization
+- Centralized thresholds
+- Provider metadata
+- Strategy metadata
+
+Phase 4.3 freeze clarifications:
+- Only Jaccard is implemented.
+- Cosine, Weighted RSSI, and Signal Distance remain placeholders.
+- No attendance decisions are made in Phase 4.3.
+- Scheduler remained unchanged.
+- Lecture activation remained unchanged.
+- Heartbeat remained unchanged.
+- Teacher capture remained unchanged.
+
+Status:
+- Phase 4.3: COMPLETE AND FROZEN
+
+## 9. Validation Status
+
+Validated in the current frozen state:
+- Focused similarity tests
+- Fingerprint tests
+- Heartbeat tests
+- Lecture activation tests
+- Full backend suite
+
+Current status:
+- Focused similarity suites are green.
+- Focused heartbeat/fingerprint/lecture activation regression suites are green.
+- Full backend suite is green in the latest validated run.
+
+## 10. Final Phase 4 Architecture Summary
+
+Lecture Scheduler
+↓
+Lecture Activation
+↓
+Teacher Presence Provider
+↓
+Teacher Reference Capture
+↓
+Teacher Reference Collector
+↓
+Wifi Reference Collector
+↓
+Reference Fingerprint
+↓
+Student Heartbeats
+↓
+Wifi Similarity Engine
+↓
+Similarity Result
+
+The Similarity Result is frozen as the upstream input contract for the Confidence Engine in Phase 4.4.
+
+## 11. Deferred Features (Intentional)
+
+The following remain intentionally unimplemented in the frozen Phase 4 scope:
+- BLE similarity
+- BLE scanning
+- Motion Correlation
+- Confidence Engine
+- Attendance Decision
+- Attendance Finalization
+- Adaptive Weighting
+
+## 12. Phase 4 Freeze Review (Concise)
+
+Architecture verification checks:
+- No duplicate services introduced for teacher capture or similarity.
+- No duplicate APIs introduced.
+- No duplicate repositories introduced.
+- Scheduler unchanged.
+- Lecture activation unchanged.
+- Teacher capture unchanged.
+- BLE is registered but disabled.
+- Motion Correlation is absent from the Phase 4.2/4.3 capture-similarity runtime path.
+- Strategy Pattern implemented.
+- Provider Pattern implemented.
+- Tests passing.
+
+Freeze report summary:
+- Files created: Phase 4.2/4.3 service and test files for capture and similarity slices.
+- Files modified: teacher/reference coordinator files and Phase 4 documentation.
+- Architectural improvements: plugin collector structure, strategy-based similarity engine, immutable similarity contract, metadata-ready extension points.
+- Validation summary: focused regressions and full backend suite green.
+- Breaking changes: NONE.
+
+Conclusion:
+- Phase 4.3 is ARCHITECTURALLY FROZEN.

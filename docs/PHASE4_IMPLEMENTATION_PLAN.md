@@ -186,5 +186,306 @@ Expected updates:
 - Remaining work: Phase 4.2 teacher Wi-Fi fingerprint capture completion and later non-attendance Phase 4 extensions only.
 - Validation: focused teacher-reference, fingerprint, and lecture-activation tests passed; full backend suite passed; Android source validation passed; Android compilation requires a working Gradle setup.
 
+## Phase 4.4 – Confidence Engine & Attendance Decision
+
+Design only. This section finalizes the implementation blueprint and introduces no code, schema, API, or protocol changes.
+
+### 1. Architecture Overview
+
+Phase 4.4 sits after Wi-Fi similarity and before final attendance lifecycle closure. The Confidence Engine consumes existing runtime signals and produces a decision artifact for attendance state handling.
+
+Logical pipeline:
+
+Daily Registration
+↓
+Lecture Scheduler
+↓
+Lecture Activation
+↓
+Teacher Presence Verification
+↓
+Teacher Reference Fingerprint
+↓
+Student Heartbeats
+↓
+Wi-Fi Similarity
+↓
+Confidence Engine
+↓
+Attendance Decision
+↓
+Attendance Finalization (future)
+
+### 2. Components To Reuse
+
+The following components are reused without replacement because they already provide the correct responsibilities and data contracts:
+
+- Timetable and scheduling foundation
+	- Timetable database foundation and CRUD lifecycle
+	- Lecture materialization and scheduler timing
+	- Reason for reuse: these already define lecture-time truth and session windows.
+
+- Activation and teacher verification chain
+	- LectureActivationService
+	- TeacherPresenceProvider and DeviceBindingProvider
+	- TeacherReferenceCaptureTrigger and TeacherCaptureLifecycle
+	- Reason for reuse: activation and teacher presence gates are already frozen and tested.
+
+- Teacher reference collection path
+	- TeacherReferenceCaptureService
+	- TeacherReferenceCollector
+	- WifiReferenceCollector
+	- BLEReferenceCollector (registered, disabled)
+	- Existing Android WifiScanManager
+	- Reason for reuse: collection orchestration is already plugin-based and stable.
+
+- Persistence and transport layers
+	- Existing fingerprint persistence for teacher reference data
+	- Existing heartbeat persistence
+	- Existing auth/JWT and rolling token validation paths
+	- Reason for reuse: all required signals already flow through these paths.
+
+- Similarity layer from Phase 4.3
+	- ReferenceFingerprintLoader
+	- StudentFingerprintLoader
+	- WifiSimilarityEngine
+	- SimilarityThresholdEngine
+	- SessionWifiSimilarityService
+	- Reason for reuse: similarity contract is frozen and strategy-ready.
+
+- Attendance read/write layers
+	- Student attendance services and current attendance state handling
+	- Reason for reuse: decision output should integrate into existing attendance persistence flow instead of creating parallel repositories.
+
+### 3. Components To Extend
+
+Only small, additive extensions are planned:
+
+- Confidence Engine service (new additive service)
+	- Purpose: aggregate existing validated inputs and produce confidence output.
+	- Change type: new service layer only, no scheduler or activation modifications.
+
+- Decision orchestration layer (new additive service)
+	- Purpose: map confidence output to attendance decision state in the current session context.
+	- Change type: orchestration only, using existing attendance persistence services.
+
+- Result models and diagnostics structures
+	- SimilarityResult consumption contract remains intact.
+	- New ConfidenceResult and DecisionResult models are introduced as additive contracts.
+	- Change type: data model extension in service layer only.
+
+- Configuration constants
+	- Additive confidence configuration keys and decision thresholds in centralized constants.
+	- Change type: centralized configuration extension, no hardcoding.
+
+### 4. Components That Must NOT Change
+
+Frozen components for Phase 4.4 planning:
+
+- Lecture Scheduler behavior
+- Lecture Activation behavior
+- Lecture Materialization behavior
+- Daily Registration flow
+- Teacher Reference Capture transport and trigger flow
+- Wi-Fi Similarity algorithm behavior from Phase 4.3
+- Heartbeat protocol and current validation order
+- Existing API contracts
+- Existing database schema and migrations
+
+### 5. Confidence Engine Inputs
+
+Confidence Engine inputs are all pre-existing signals:
+
+- Device Binding signal
+	- Source: device binding validation outcome from current auth/heartbeat path.
+	- Meaning: indicates student device legitimacy.
+
+- Teacher Presence signal
+	- Source: teacher presence verification chain used by activation.
+	- Meaning: indicates teacher presence context for the active lecture.
+
+- Teacher Reference Fingerprint signal
+	- Source: persisted session reference fingerprint.
+	- Meaning: provides lecture-specific environment baseline.
+
+- Student Wi-Fi Similarity signal
+	- Source: SessionWifiSimilarityService and SimilarityResult.
+	- Meaning: indicates location similarity classification and score.
+
+- Heartbeat Continuity signal
+	- Source: accepted/rejected heartbeat continuity and sequence progression data.
+	- Meaning: indicates temporal consistency of student presence.
+
+- Token Validation signal
+	- Source: rolling-token and sequence integrity checks.
+	- Meaning: indicates anti-replay/session integrity confidence.
+
+- Daily Registration signal
+	- Source: existing daily registration validity and session enrollment context.
+	- Meaning: indicates student eligibility to be evaluated for the lecture.
+
+- Lecture Active Status and timetable context
+	- Source: active session and timetable-derived lecture state.
+	- Meaning: ensures confidence is evaluated only in valid lecture windows.
+
+No weights are assigned in this design section.
+
+### 6. Confidence Engine Outputs
+
+Planned output contract fields:
+
+- confidenceScore
+	- Normalized scalar score in a bounded range.
+
+- decisionState
+	- Intermediate decision state used by attendance decision layer (not finalization).
+
+- eligibility
+	- Indicates whether all required preconditions for confidence evaluation were satisfied.
+
+- decisionReason
+	- Primary reason explaining the resulting decision state.
+
+- validationBreakdown
+	- Structured factor-level status for each input signal.
+
+- warnings
+	- Non-fatal issues such as missing optional signals or degraded evidence quality.
+
+- timestamp
+	- Evaluation timestamp for audit and traceability.
+
+### 7. Attendance Decision Pipeline
+
+Planned decision pipeline (no calculations implemented in this phase design):
+
+Collect Inputs
+↓
+Validate Input Completeness and Session Context
+↓
+Compute Confidence (using configured factors)
+↓
+Determine Decision State
+↓
+Persist Decision Artifact Through Existing Attendance Services
+↓
+Expose Decision Context To Existing Monitoring/Reporting Layers
+↓
+Future Attendance Finalization
+
+This pipeline explicitly avoids replacing existing heartbeat, scheduler, and activation responsibilities.
+
+### 8. Future BLE Integration
+
+BLE integration remains optional and additive. It plugs in as follows:
+
+- TeacherReferenceCollector
+	- BLEReferenceCollector remains registered and can be enabled later.
+
+- TeacherPresenceProvider
+	- BLE provider branch can contribute presence evidence when implemented.
+
+- Similarity layer
+	- BLE similarity can be introduced as an additional strategy/provider input without replacing Wi-Fi logic.
+
+- Confidence Engine
+	- BLE becomes an additional factor in validationBreakdown and scoring inputs.
+
+No scheduler, activation, or API redesign is required for BLE integration.
+
+### 9. Future Motion Correlation
+
+Motion Correlation remains future, optional, and decoupled:
+
+- It enters as an optional provider signal in TeacherPresenceProvider and Confidence Engine input aggregation.
+- It does not modify lecture scheduling, activation timing, or teacher capture transport.
+- It can be enabled by configuration when implemented, remaining non-blocking if unavailable.
+
+### 10. Extension Points
+
+Existing and planned extension points:
+
+- SimilarityStrategy
+	- Additional algorithms can be added without changing engine orchestration.
+
+- TeacherPresenceProvider
+	- Additional evidence providers can be registered through provider pattern.
+
+- TeacherReferenceProvider
+	- Additional collection providers can be registered in collector.
+
+- SimilarityResult
+	- Already enriched for downstream confidence consumption.
+
+- ConfidenceResult (planned)
+	- Additive fields can be introduced for diagnostics and future factors.
+
+- Decision pipeline contracts (planned)
+	- Decision rules can evolve by configuration, not architectural replacement.
+
+### 11. Risks
+
+Key architectural risks and mitigation through existing design:
+
+- False positives in location evidence
+	- Mitigation: similarity classification + multi-signal confidence aggregation.
+
+- False negatives due to environmental drift
+	- Mitigation: lecture-specific teacher reference fingerprints and continuity signals.
+
+- Network instability and heartbeat jitter
+	- Mitigation: continuity handling, token windows, and persisted rejection reasons.
+
+- Wi-Fi environment volatility
+	- Mitigation: normalized similarity contracts and centralized thresholds.
+
+- Token replay or session spoofing
+	- Mitigation: rolling token validation, sequence checks, and device binding checks.
+
+- Missing or delayed fingerprint data
+	- Mitigation: eligibility state and warnings in confidence output instead of implicit acceptance.
+
+### 12. Implementation Order
+
+Planned incremental implementation order for Phase 4.4:
+
+Step 1
+- Define ConfidenceResult model and decision-state contract.
+
+Step 2
+- Define ConfidenceEngine interface and input aggregation contract.
+
+Step 3
+- Implement confidence aggregation service using existing signals only.
+
+Step 4
+- Implement decision orchestration service that maps confidence output to attendance decision state.
+
+Step 5
+- Integrate decision artifacts with existing attendance persistence/services (no new APIs).
+
+Step 6
+- Add unit tests for confidence input validation, aggregation behavior, and decision mapping.
+
+Step 7
+- Add integration/regression tests over heartbeat, similarity, activation, and attendance flows.
+
+Step 8
+- Validate with full backend suite and architecture freeze checklist.
+
+Final validation checklist for this design:
+
+- Reuses existing services.
+- Does not duplicate logic.
+- Requires no scheduler redesign.
+- Requires no lecture activation redesign.
+- Requires no teacher capture redesign.
+- Requires no similarity redesign.
+- Keeps BLE as an extension point.
+- Keeps Motion Correlation as future optional work.
+- Keeps Phase 4.3 frozen.
+
+This section is the finalized Phase 4.4 implementation blueprint and remains design-only.
+
 ## Implementation Rule
 Before coding any Phase 4 feature, verify that no existing service already solves the requirement. Extend first, create only when no suitable implementation exists.
