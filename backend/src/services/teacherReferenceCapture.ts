@@ -31,10 +31,9 @@ export interface TeacherCaptureAudit {
 
 export interface TeacherCaptureLifecycle {
   captureRequested(result: TeacherReferenceCaptureResult): void;
-  captureDelivered(result: TeacherReferenceCaptureResult): void;
-  captureAcknowledged(result: TeacherReferenceCaptureResult): void;
+  captureStarted(result: TeacherReferenceCaptureResult): void;
+  captureCompleted(result: TeacherReferenceCaptureResult): void;
   captureFailed(result: TeacherReferenceCaptureResult, error?: unknown): void;
-  captureExpired(result: TeacherReferenceCaptureResult): void;
 }
 
 export function createLoggingTeacherCaptureAudit(): TeacherCaptureAudit {
@@ -59,23 +58,19 @@ export function createLoggingTeacherCaptureLifecycle(): TeacherCaptureLifecycle 
     captureRequested(result: TeacherReferenceCaptureResult) {
       console.info('teacher_capture_requested', result.requestId, result.sessionId);
     },
-    captureDelivered(result: TeacherReferenceCaptureResult) {
-      console.info('teacher_capture_delivered', result.requestId, result.sessionId);
+    captureStarted(result: TeacherReferenceCaptureResult) {
+      console.info('teacher_capture_started', result.requestId, result.sessionId);
     },
-    captureAcknowledged(result: TeacherReferenceCaptureResult) {
-      console.info('teacher_capture_acknowledged', result.requestId, result.sessionId);
+    captureCompleted(result: TeacherReferenceCaptureResult) {
+      console.info('teacher_capture_completed', result.requestId, result.sessionId);
     },
     captureFailed(result: TeacherReferenceCaptureResult, error?: unknown) {
       console.warn('teacher_capture_failed', result.requestId, result.sessionId, error);
-    },
-    captureExpired(result: TeacherReferenceCaptureResult) {
-      console.warn('teacher_capture_expired', result.requestId, result.sessionId);
     }
   };
 }
 
 export function createPlaceholderTeacherReferenceCaptureTrigger(): TeacherReferenceCaptureTrigger {
-  const audit = createLoggingTeacherCaptureAudit();
   const lifecycle = createLoggingTeacherCaptureLifecycle();
 
   return {
@@ -89,23 +84,22 @@ export function createPlaceholderTeacherReferenceCaptureTrigger(): TeacherRefere
         message: 'CAPTURE_REQUESTED'
       };
 
-      audit.onRequested(result);
-      lifecycle.captureRequested(result);
-      audit.onDelivered(result);
-      lifecycle.captureDelivered(result);
-      audit.onAcknowledged({
-        ...result,
-        deliveryStatus: 'ACKNOWLEDGED'
-      });
-      lifecycle.captureAcknowledged({
-        ...result,
-        deliveryStatus: 'ACKNOWLEDGED'
-      });
+      try {
+        lifecycle.captureRequested(result);
+        lifecycle.captureStarted(result);
 
-      return {
-        ...result,
-        deliveryStatus: 'ACKNOWLEDGED'
-      };
+        const completedResult: TeacherReferenceCaptureResult = {
+          ...result,
+          deliveryStatus: 'ACKNOWLEDGED'
+        };
+
+        lifecycle.captureCompleted(completedResult);
+
+        return completedResult;
+      } catch (error) {
+        lifecycle.captureFailed(result, error);
+        throw error;
+      }
     }
   };
 }

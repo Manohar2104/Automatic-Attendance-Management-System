@@ -2,6 +2,20 @@
 
 Status: Planning only. No Phase 4 code changes should be made until the gap analysis below is approved.
 
+## Phase 4.1 Freeze Status
+- Phase 4.1 is architecturally complete and frozen.
+- The scheduler and lecture activation flow remain unchanged and depend only on abstractions.
+- The Android teacher-reference path is separated into its own package, with a plugin-style collector and a BLE placeholder left inactive.
+- Existing fingerprint storage and API reuse were preserved.
+- Full backend validation passed, and the touched Android source files are syntactically clean.
+- Android compilation remains environment-dependent if Gradle or the wrapper JAR is unavailable.
+
+## Phase 4.2 Scope
+- Trigger teacher Wi-Fi reference fingerprint capture when a lecture becomes ACTIVE.
+- Reuse the existing lecture activation service, teacher-reference trigger, capture service, collector, repository, API, Wi-Fi scan manager, and fingerprint persistence.
+- Keep BLE as a placeholder only.
+- Do not implement Wi-Fi similarity, attendance decisions, motion correlation, confidence scoring, scheduler changes, or heartbeat changes.
+
 ## Phase 4 Goal
 Extend the existing timetable-driven system to support teacher reference Wi-Fi fingerprint capture, student Wi-Fi fingerprint collection, Wi-Fi similarity classification, BLE proximity verification, and timetable-aware heartbeat monitoring without duplicating existing services.
 
@@ -164,6 +178,13 @@ Expected updates:
 - No confidence-engine redesign is introduced in Phase 4.
 - No dashboard redesign is introduced in Phase 4.
 - Existing tests remain green after any Phase 4 extension work.
+
+## 11. Phase 4.1 Freeze Notes
+- Completed: lecture scheduler, lecture activation service, TeacherPresenceProvider, DeviceBindingProvider, TeacherReferenceCaptureTrigger, TeacherReferenceCaptureService, TeacherReferenceCollector, WifiReferenceCollector, BLE placeholder, TeacherCaptureLifecycle, existing fingerprint reuse, plugin architecture, Android separation of concerns.
+- Postponed: Wi-Fi similarity, student fingerprint comparison, BLE implementation, motion correlation, confidence scoring, and heartbeat or scheduler redesigns.
+- Extension points: BLE provider registration, future Wi-Fi similarity engine, and any later Phase 4 transport/coordination work.
+- Remaining work: Phase 4.2 teacher Wi-Fi fingerprint capture completion and later non-attendance Phase 4 extensions only.
+- Validation: focused teacher-reference, fingerprint, and lecture-activation tests passed; full backend suite passed; Android source validation passed; Android compilation requires a working Gradle setup.
 
 ## Implementation Rule
 Before coding any Phase 4 feature, verify that no existing service already solves the requirement. Extend first, create only when no suitable implementation exists.
