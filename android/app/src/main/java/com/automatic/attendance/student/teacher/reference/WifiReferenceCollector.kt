@@ -8,6 +8,12 @@ class WifiReferenceCollector(
 ) : TeacherReferenceProvider {
 
     override val providerName: String = "WifiReferenceCollector"
+    override val providerMetadata: TeacherReferenceProviderMetadata = TeacherReferenceProviderMetadata(
+        name = "Wi-Fi Reference Collector",
+        version = "1.0",
+        enabled = true,
+        capabilities = setOf(TeacherReferenceCapability.WIFI)
+    )
 
     override suspend fun collectReferenceFingerprint(): TeacherReferenceProviderResult {
         val fingerprint = wifiScanManager.getWifiFingerprint()

@@ -12,8 +12,22 @@ data class TeacherReferenceProviderResult(
     val message: String? = null
 )
 
+enum class TeacherReferenceCapability {
+    WIFI,
+    BLE,
+    MOTION
+}
+
+data class TeacherReferenceProviderMetadata(
+    val name: String,
+    val version: String,
+    val enabled: Boolean,
+    val capabilities: Set<TeacherReferenceCapability>
+)
+
 interface TeacherReferenceProvider {
     val providerName: String
+    val providerMetadata: TeacherReferenceProviderMetadata
 
     suspend fun collectReferenceFingerprint(): TeacherReferenceProviderResult
 }
@@ -28,12 +42,17 @@ data class TeacherReferenceCollectionResult(
     val metadata: Map<String, Any?> = emptyMap()
 )
 
+private data class RegisteredTeacherReferenceProvider(
+    val provider: TeacherReferenceProvider,
+    val enabled: Boolean
+)
+
 class TeacherReferenceCollector(
-    private val providers: MutableList<TeacherReferenceProvider> = mutableListOf()
+    private val providers: MutableList<RegisteredTeacherReferenceProvider> = mutableListOf()
 ) {
 
-    fun registerProvider(provider: TeacherReferenceProvider) {
-        providers.add(provider)
+    fun registerProvider(provider: TeacherReferenceProvider, enabled: Boolean = true) {
+        providers.add(RegisteredTeacherReferenceProvider(provider, enabled))
     }
 
     suspend fun collectReferenceFingerprint(): TeacherReferenceCollectionResult {
@@ -43,10 +62,33 @@ class TeacherReferenceCollector(
         val failedProviders = mutableListOf<String>()
         val providerResults = mutableListOf<TeacherReferenceProviderResult>()
 
-        for (provider in providers) {
+        for (registeredProvider in providers) {
+            val provider = registeredProvider.provider
             providersUsed.add(provider.providerName)
+            val effectiveMetadata = provider.providerMetadata.copy(enabled = registeredProvider.enabled)
+
+            if (!registeredProvider.enabled) {
+                failedProviders.add(provider.providerName)
+                providerResults.add(
+                    TeacherReferenceProviderResult(
+                        success = false,
+                        providerName = provider.providerName,
+                        metadata = mapOf(
+                            "status" to "DISABLED",
+                            "providerMetadata" to effectiveMetadata
+                        ),
+                        message = "PROVIDER_DISABLED"
+                    )
+                )
+                continue
+            }
+
             val result = provider.collectReferenceFingerprint()
-            providerResults.add(result)
+            providerResults.add(
+                result.copy(
+                    metadata = result.metadata + mapOf("providerMetadata" to effectiveMetadata)
+                )
+            )
 
             if (result.success) {
                 successfulProviders.add(provider.providerName)

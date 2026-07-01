@@ -56,3 +56,12 @@ Validated successfully:
 
 Android compilation validation:
 - Not executed in this environment because Gradle availability is environment-dependent. If the wrapper JAR or system Gradle is present, compile validation should be rerun.
+
+## 6. Phase 4.3 Architectural Refinement
+
+Refinement-only updates were applied without changing scheduler, lecture activation, teacher capture, heartbeat, attendance decision logic, API contracts, or schema:
+- Wi-Fi similarity engine refactored to a strategy pattern with `JaccardSimilarityStrategy` active and placeholder strategies for cosine, weighted RSSI, and signal distance.
+- Similarity outputs upgraded to an immutable, richer result object including provider and comparison metadata, plus reserved confidence metadata for Phase 4.4.
+- Fingerprint normalization is now centralized before strategy execution (lowercase BSSID, duplicate removal, malformed/null filtering, deterministic ordering).
+- Jaccard remains pure set overlap on normalized BSSID sets only (no RSSI/frequency/channel weighting).
+- Similarity thresholds remain centralized through `projectConstants` and the threshold engine.

@@ -44,6 +44,7 @@ class TeacherReferenceCaptureService : Service() {
 
         collector = TeacherReferenceCollector().apply {
             registerProvider(WifiReferenceCollector(wifiScanManager))
+            registerProvider(BLEReferenceCollector(), enabled = false)
         }
 
         repository = TeacherReferenceRepository(retrofit)
