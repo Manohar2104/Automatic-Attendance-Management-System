@@ -83,9 +83,15 @@ class Find3Subscriber:
         SessionLocal = get_sessionmaker()
         async with SessionLocal() as db:
             try:
+                raw_fingerprint = device_fingerprint
+                if ":" in device_fingerprint:
+                    raw_fingerprint = device_fingerprint.split(":", 1)[1]
+
                 q = await db.execute(
                     DeviceBinding.__table__.select().where(
-                        DeviceBinding.device_fingerprint == device_fingerprint
+                        DeviceBinding.device_fingerprint.in_(
+                            [device_fingerprint, raw_fingerprint]
+                        )
                     )
                 )
                 row = q.first()

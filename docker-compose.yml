@@ -53,7 +53,6 @@ services:
       - ./server/.env
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - FIND3_WS_URL=ws://find3:8003/ws?family=smart_attendance&device=all
       - HOST=0.0.0.0
       - PORT=8000
     depends_on:

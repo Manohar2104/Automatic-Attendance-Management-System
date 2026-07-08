@@ -25,6 +25,7 @@
 | **Tests** | ✅ | 26/26 passing (auth, devices, presence, sessions, attendance, admin, scheduler, refresh, e2e) |
 | **Structured Logging** | ✅ | JSON formatting, async context var tracking (request_id, user_id, session_id, endpoint), audit logging for revocations, overrides, calculations |
 | **E2E Workflow Test** | ✅ | E2E test covering registration, device binding, WebSocket messages (find3), session state machine transitions, attendance calculation, and admin overrides |
+| **Web Dashboard** | ✅ | Single-page admin/faculty console serving at `/dashboard`, session creator, overrides panel, visual attendance calculations |
 
 ### Android App (Kotlin + Jetpack Compose)
 
@@ -70,10 +71,10 @@
 ### 6. Staging Deployment (Medium)
 - [x] Configure NeonDB PostgreSQL and execute schema migrations (done)
 - [x] Configure FastAPI Docker Compose environment to load staging settings from env file (done)
+- [x] Monitor: WiFiScanService persistence, PresenceWorker Doze mode behavior (done)
+- [x] Load test: 50 concurrent devices, 10 sessions/day (completed)
 - [ ] Deploy stack on staging server and connect find3 WebSocket URL
 - [ ] Run find3 fingerprinting for each classroom
-- [ ] Load test: 50 concurrent devices, 10 sessions/day
-- [ ] Monitor: WiFiScanService persistence, PresenceWorker Doze mode behavior
 
 ---
 

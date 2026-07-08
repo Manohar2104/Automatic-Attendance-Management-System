@@ -1,16 +1,15 @@
 import asyncio
 import uuid
 import datetime
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
 from app.config import settings
 from app.models import Base, User, RoleEnum, Session, SessionStatus
+from app.db import get_engine, get_sessionmaker
 
 async def main():
     DATABASE_URL = settings.database_url
     print(f"Connecting to database: {DATABASE_URL}")
-    engine = create_async_engine(DATABASE_URL, future=True, echo=False)
-    SessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    engine = get_engine()
+    SessionLocal = get_sessionmaker()
     
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

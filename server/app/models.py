@@ -27,7 +27,7 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    role = Column(Enum(RoleEnum), default=RoleEnum.STUDENT, nullable=False)
+    role = Column(Enum(RoleEnum, native_enum=False), default=RoleEnum.STUDENT, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -39,7 +39,7 @@ class DeviceBinding(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
     )
     device_fingerprint = Column(String(255), nullable=False, unique=True, index=True)
-    status = Column(Enum(BindingStatus), default=BindingStatus.ACTIVE, nullable=False)
+    status = Column(Enum(BindingStatus, native_enum=False), default=BindingStatus.ACTIVE, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
@@ -52,7 +52,7 @@ class Attendance(Base):
     student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     session_id = Column(String(255), nullable=False)
     score = Column(Float, nullable=True)
-    status = Column(Enum(AttendanceStatus), nullable=False)
+    status = Column(Enum(AttendanceStatus, native_enum=False), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -73,7 +73,7 @@ class Session(Base):
     actual_start = Column(DateTime(timezone=True), nullable=True)
     actual_end = Column(DateTime(timezone=True), nullable=True)
     status = Column(
-        Enum(SessionStatus), default=SessionStatus.SCHEDULED, nullable=False
+        Enum(SessionStatus, native_enum=False), default=SessionStatus.SCHEDULED, nullable=False
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -89,7 +89,7 @@ class Event(Base):
     # user_id may be null for anonymous/unbound devices
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     session_id = Column(String(255), nullable=True)
-    type = Column(Enum(EventType), nullable=False)
+    type = Column(Enum(EventType, native_enum=False), nullable=False)
     location = Column(String(255), nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -101,7 +101,7 @@ class AttendanceOverride(Base):
         UUID(as_uuid=True), ForeignKey("attendances.id"), nullable=False
     )
     admin_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    original_status = Column(Enum(AttendanceStatus), nullable=False)
-    override_status = Column(Enum(AttendanceStatus), nullable=False)
+    original_status = Column(Enum(AttendanceStatus, native_enum=False), nullable=False)
+    override_status = Column(Enum(AttendanceStatus, native_enum=False), nullable=False)
     justification = Column(String(1024), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

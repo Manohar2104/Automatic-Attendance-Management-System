@@ -23,7 +23,7 @@ class PreferencesManager(private val context: Context) {
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val IS_SCANNING = booleanPreferencesKey("is_scanning")
 
-        const val DEFAULT_SERVER_URL = "http://10.215.4.159:8000"
+        const val DEFAULT_SERVER_URL = "http://10.108.234.159:8000"
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->

@@ -109,6 +109,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Get client IP
         client_ip = request.client.host if request.client else "unknown"
 
+        # Bypass rate limit for localhost, Docker internal networks, or bypass header
+        if (
+            client_ip in ("127.0.0.1", "::1", "localhost")
+            or client_ip.startswith("172.")
+            or request.headers.get("x-bypass-rate-limit") == "true"
+        ):
+            return await call_next(request)
+
         # Determine rate limit based on path
         path = request.url.path
 
@@ -178,6 +186,14 @@ app.add_middleware(StructuredLoggingMiddleware)
 async def health(db: AsyncSession = Depends(get_db)):
     now = datetime.datetime.now(datetime.timezone.utc)
     return HealthCheck(status="ok", now=now)
+
+
+@app.get("/dashboard")
+async def get_dashboard():
+    from fastapi.responses import FileResponse
+    import os
+    static_file_path = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
+    return FileResponse(static_file_path)
 
 
 @app.post("/register", response_model=Token)
@@ -463,10 +479,32 @@ async def compute_attendance(
     if duration_seconds:
         max_possible = max(1, duration_seconds // settings.submission_interval_seconds)
 
+    # Fetch existing attendances and overrides for this session
+    q_existing = await db.execute(
+        select(Attendance).where(Attendance.session_id == session_id)
+    )
+    existing_attendances = {a.student_id: a for a in q_existing.scalars().all()}
+
+    q_overrides = await db.execute(
+        select(AttendanceOverride, Attendance.student_id)
+        .join(Attendance, AttendanceOverride.attendance_id == Attendance.id)
+        .where(Attendance.session_id == session_id)
+    )
+    overrides_data = q_overrides.all()
+    overrides = {}
+    for ov, student_id in overrides_data:
+        if student_id not in overrides or ov.created_at > overrides[student_id].created_at:
+            overrides[student_id] = ov
+
+    # Compute for union of user_events and existing_attendances to preserve overrides/history
+    all_student_ids = set(user_events.keys()).union(existing_attendances.keys())
+
     results = []
     bound_count = 0
-    for user_id, evs in user_events.items():
-        bound_count += 1
+    for user_id in all_student_ids:
+        evs = user_events.get(user_id, [])
+        if evs:
+            bound_count += 1
         enter_count = sum(1 for e in evs if e.type == EventType.ENTER)
         raw_score = (
             min(100, int((enter_count / max_possible) * 100)) if max_possible else 0
@@ -480,13 +518,28 @@ async def compute_attendance(
                 else AttendanceStatus.ABSENT
             )
         )
-        attendance = Attendance(
-            student_id=user_id,
-            session_id=session_id,
-            score=raw_score,
-            status=status_enum,
-        )
-        db.add(attendance)
+
+        attendance = existing_attendances.get(user_id)
+        override = overrides.get(user_id)
+
+        final_status = status_enum
+        if override:
+            final_status = override.override_status
+
+        if attendance:
+            attendance.score = raw_score
+            attendance.status = final_status
+            db.add(attendance)
+        else:
+            attendance = Attendance(
+                student_id=user_id,
+                session_id=session_id,
+                score=raw_score,
+                status=final_status,
+            )
+            db.add(attendance)
+            await db.flush()
+
         location_match = location_filter is None or any(
             e.location == location_filter for e in evs
         )
@@ -494,7 +547,7 @@ async def compute_attendance(
             AttendanceResult(
                 user_id=str(user_id),
                 score=raw_score,
-                status=status_enum.value,
+                status=final_status.value,
                 enter_count=enter_count,
                 location_match=location_match,
             )
@@ -545,12 +598,22 @@ async def create_session(
     from .models import Session, SessionStatus
     from datetime import datetime as dt
 
+    try:
+        # Handle + sign decoded as space in URL query params
+        parsed_start = dt.fromisoformat(scheduled_start.replace(" ", "+"))
+        parsed_end = dt.fromisoformat(scheduled_end.replace(" ", "+"))
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid scheduled_start or scheduled_end format. Use ISO format.",
+        )
+
     session = Session(
         course_id=course_id,
         room_id=room_id,
         location=location,
-        scheduled_start=dt.fromisoformat(scheduled_start),
-        scheduled_end=dt.fromisoformat(scheduled_end),
+        scheduled_start=parsed_start,
+        scheduled_end=parsed_end,
         status=SessionStatus.SCHEDULED,
     )
     db.add(session)
@@ -750,7 +813,15 @@ async def override_attendance(
     attendance = q.scalars().first()
     session_id_var.set(session_id)
     if not attendance:
-        raise HTTPException(status_code=404, detail="Attendance record not found")
+        # Create a placeholder attendance record first
+        attendance = Attendance(
+            student_id=student_uuid,
+            session_id=session_id,
+            score=0.0,
+            status=AttendanceStatus.ABSENT,
+        )
+        db.add(attendance)
+        await db.flush()  # Populate attendance.id
 
     # Create override record
     override = AttendanceOverride(

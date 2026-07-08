@@ -13,7 +13,25 @@ def get_engine():
     global _engine, _SessionLocal
     if _engine is None:
         DATABASE_URL = settings.database_url
-        _engine = create_async_engine(DATABASE_URL, future=True, echo=False)
+        connect_args = {}
+        if "asyncpg" in DATABASE_URL:
+            from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+            parsed = urlparse(DATABASE_URL)
+            query_params = dict(parse_qsl(parsed.query))
+            
+            sslmode = query_params.pop("sslmode", None)
+            query_params.pop("channel_binding", None)
+            
+            if sslmode in ("require", "verify-ca", "verify-full"):
+                connect_args["ssl"] = True
+                
+            new_query = urlencode(query_params)
+            parsed = parsed._replace(query=new_query)
+            DATABASE_URL = urlunparse(parsed)
+            
+        _engine = create_async_engine(
+            DATABASE_URL, connect_args=connect_args, future=True, echo=False
+        )
         _SessionLocal = sessionmaker(
             bind=_engine, class_=AsyncSession, expire_on_commit=False
         )

@@ -10,12 +10,19 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.smartattendance.app.MainActivity
 import com.smartattendance.app.R
 import com.smartattendance.app.SmartAttendanceApp
+import com.smartattendance.app.data.PreferencesManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 
 class WiFiScanService : Service() {
 
@@ -54,6 +61,59 @@ class WiFiScanService : Service() {
         }
     }
 
+    private val httpClient = OkHttpClient()
+
+    private suspend fun uploadScanToFind3(scanResults: List<android.net.wifi.ScanResult>) {
+        val prefs = PreferencesManager(applicationContext)
+        val deviceId = prefs.deviceId.first()
+        val serverUrl = prefs.serverUrl.first()
+        
+        if (deviceId.isBlank() || serverUrl.isBlank()) return
+
+        val host = try {
+            val uri = java.net.URI(serverUrl)
+            uri.host ?: "127.0.0.1"
+        } catch (e: Exception) {
+            "127.0.0.1"
+        }
+        val find3Url = "http://$host:8005/data"
+
+        val wifiJson = JSONObject()
+        for (res in scanResults) {
+            wifiJson.put(res.BSSID, res.level)
+        }
+
+        val sensorsJson = JSONObject()
+        sensorsJson.put("wifi", wifiJson)
+
+        val payload = JSONObject()
+        payload.put("d", deviceId)
+        payload.put("f", "pes") // Active family name
+        payload.put("t", System.currentTimeMillis())
+        payload.put("s", sensorsJson)
+
+        val mediaType = "application/json; charset=utf-8".toMediaType()
+        val requestBody = payload.toString().toRequestBody(mediaType)
+        val request = Request.Builder()
+            .url(find3Url)
+            .post(requestBody)
+            .build()
+
+        try {
+            withContext(Dispatchers.IO) {
+                httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.e("WiFiScanService", "Find3 upload failed: ${response.code}")
+                    } else {
+                        Log.d("WiFiScanService", "Find3 upload success: ${response.body?.string()}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WiFiScanService", "Find3 upload error: ${e.message}")
+        }
+    }
+
     private suspend fun performScan() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         val wakeLock = powerManager?.newWakeLock(
@@ -72,6 +132,7 @@ class WiFiScanService : Service() {
                     val bssids = scanResults.take(5).map { "${it.SSID}(${it.level}dBm)" }
 
                     onScanResult(bssids, strongest?.level ?: 0)
+                    uploadScanToFind3(scanResults)
                 }
             }
         } catch (e: Exception) {

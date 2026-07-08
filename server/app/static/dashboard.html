@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Attendance - Admin & Faculty Panel</title>
+    <!-- Outfit Font from Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0b0f19;
+            --bg-secondary: #131a2e;
+            --bg-tertiary: #1b2541;
+            --accent-primary: #3b82f6;
+            --accent-hover: #2563eb;
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --color-success: #10b981;
+            --color-warning: #f59e0b;
+            --color-error: #ef4444;
+            --color-border: #2d3a5a;
+            --font-main: 'Outfit', sans-serif;
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.5);
+            --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-main);
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        header {
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--color-border);
+            padding: 1.25rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            background: linear-gradient(135deg, var(--accent-primary), #6366f1);
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.25rem;
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
+        }
+
+        .logo-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.025em;
+            background: linear-gradient(to right, #ffffff, #93c5fd);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .user-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .btn {
+            font-family: var(--font-main);
+            background-color: var(--accent-primary);
+            color: white;
+            border: none;
+            padding: 0.625rem 1.25rem;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            background-color: var(--accent-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            border: 1px solid var(--color-border);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--bg-tertiary);
+            border-color: var(--text-muted);
+        }
+
+        .btn-error {
+            background-color: var(--color-error);
+        }
+        .btn-error:hover {
+            background-color: #dc2626;
+        }
+
+        main {
+            flex: 1;
+            padding: 2.5rem 2rem;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 2.5rem;
+        }
+
+        .grid-two-cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2.5rem;
+        }
+
+        @media (max-width: 1024px) {
+            .grid-two-cols {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--color-border);
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: white;
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: 0.75rem;
+        }
+
+        .input-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .input-field {
+            font-family: var(--font-main);
+            width: 100%;
+            background-color: var(--bg-primary);
+            border: 1px solid var(--color-border);
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: var(--transition-smooth);
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+        }
+
+        /* Sessions list design */
+        .sessions-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            max-height: 500px;
+            overflow-y: auto;
+            padding-right: 0.5rem;
+        }
+
+        .session-item {
+            background-color: var(--bg-tertiary);
+            border: 1px solid var(--color-border);
+            border-radius: 0.75rem;
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .session-item:hover {
+            border-color: var(--accent-primary);
+            transform: scale(1.01);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .session-item.selected {
+            border-color: var(--accent-primary);
+            background-color: rgba(59, 130, 246, 0.08);
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+        }
+
+        .session-meta h4 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: white;
+            margin-bottom: 0.25rem;
+        }
+
+        .session-meta p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .badge {
+            padding: 0.35rem 0.75rem;
+            border-radius: 2rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-scheduled {
+            background-color: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .badge-active {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            animation: pulse 2s infinite;
+        }
+
+        .badge-completed {
+            background-color: rgba(107, 114, 128, 0.15);
+            color: #9ca3af;
+            border: 1px solid rgba(107, 114, 128, 0.3);
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+
+        /* Results table design */
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+            margin-top: 1rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            padding: 0.75rem 1rem;
+            border-bottom: 2px solid var(--color-border);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--color-border);
+            font-size: 0.95rem;
+        }
+
+        tr:hover td {
+            background-color: rgba(255,255,255,0.02);
+        }
+
+        .status-present { color: var(--color-success); font-weight: 600; }
+        .status-partial { color: var(--color-warning); font-weight: 600; }
+        .status-absent { color: var(--color-error); font-weight: 600; }
+
+        /* Login view styling */
+        .login-wrapper {
+            max-width: 450px;
+            width: 100%;
+            margin: 5rem auto;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background-color: var(--bg-tertiary);
+            border: 1px solid var(--color-border);
+            border-left: 4px solid var(--accent-primary);
+            padding: 1rem 1.5rem;
+            border-radius: 0.5rem;
+            box-shadow: var(--shadow-lg);
+            z-index: 1000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: var(--transition-smooth);
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        /* Custom Modal Styling */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            pointer-events: none;
+            transition: var(--transition-smooth);
+        }
+
+        .modal.show {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .modal-content {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--color-border);
+            border-radius: 1rem;
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: var(--shadow-lg);
+            transform: scale(0.9);
+            transition: var(--transition-smooth);
+        }
+
+        .modal.show .modal-content {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+            color: white;
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: 0.5rem;
+        }
+
+        .modal-footer {
+            margin-top: 1.5rem;
+            display: flex;
+            justify-content: flex-end;
+            gap: 1rem;
+        }
+
+        /* Custom scrollbar for container */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--color-border);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header Section -->
+    <header>
+        <div class="logo-section">
+            <div class="logo-icon">A</div>
+            <div class="logo-title">Smart Attendance Console</div>
+        </div>
+        <div class="user-controls" id="header-auth-controls" style="display: none;">
+            <span id="user-display" style="color: var(--text-secondary); font-size: 0.9rem;"></span>
+            <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+    </header>
+
+    <!-- Login View -->
+    <div id="login-view" class="login-wrapper">
+        <div class="card">
+            <div class="card-title">Portal Login</div>
+            <form onsubmit="handleLogin(event)">
+                <div class="input-group">
+                    <label for="email">Admin/Faculty Email</label>
+                    <input class="input-field" type="email" id="email" required placeholder="name@example.com">
+                </div>
+                <div class="input-group">
+                    <label for="password">Password</label>
+                    <input class="input-field" type="password" id="password" required placeholder="••••••••">
+                </div>
+                <button type="submit" class="btn" style="width: 100%; justify-content: center; margin-top: 1.5rem;">Authenticate</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Application Panel (Dashboard) -->
+    <main id="app-view" style="display: none;">
+        <div class="grid-two-cols">
+            
+            <!-- Left Side: Sessions List & Scheduler -->
+            <div class="card" style="display: flex; flex-direction: column; gap: 1.5rem;">
+                <div>
+                    <div class="card-title">Active & Scheduled Sessions</div>
+                    <div id="sessions-list" class="sessions-container">
+                        <!-- Filled dynamically -->
+                        <p style="color: var(--text-muted); text-align: center; padding: 2rem 0;">No sessions available. Run the seeding tool or create one.</p>
+                    </div>
+                </div>
+
+                <div style="border-top: 1px solid var(--color-border); padding-top: 1.5rem;">
+                    <div class="card-title">Schedule New Session</div>
+                    <form onsubmit="handleCreateSession(event)">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="input-group">
+                                <label for="course_id">Course ID</label>
+                                <input class="input-field" type="text" id="course_id" required placeholder="e.g. CS101">
+                            </div>
+                            <div class="input-group">
+                                <label for="room_id">Room ID</label>
+                                <input class="input-field" type="text" id="room_id" required placeholder="e.g. room-101">
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label for="location">Location Name (FIND3 calibrated label)</label>
+                            <input class="input-field" type="text" id="location" required placeholder="e.g. Room 101">
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="input-group">
+                                <label for="scheduled_start">Start Time</label>
+                                <input class="input-field" type="datetime-local" id="scheduled_start" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="scheduled_end">End Time</label>
+                                <input class="input-field" type="datetime-local" id="scheduled_end" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn" style="width: 100%; justify-content: center; margin-top: 1rem;">Create and Schedule</button>
+                    </form>
+                </div>
+
+                <div style="border-top: 1px solid var(--color-border); padding-top: 1.5rem;">
+                    <div class="card-title">Bulk Upload Timetable (JSON)</div>
+                    <div style="display: flex; flex-direction: column; gap: 1rem;">
+                        <p style="color: var(--text-secondary); font-size: 0.85rem; margin: 0; line-height: 1.4;">
+                            Upload a JSON file containing timetable entries.
+                            Format: <code>[{"course_id":"CS101", "room_id":"211", "location":"211", "scheduled_start":"2026-07-08T09:00:00Z", "scheduled_end":"2026-07-08T10:00:00Z"}]</code>
+                        </p>
+                        <input class="input-field" type="file" id="timetable-file" accept=".json" style="padding: 0.5rem;">
+                        <button onclick="handleBulkUpload(event)" class="btn" style="width: 100%; justify-content: center;">Upload and Import</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Side: Selected Session Attendance Computation -->
+            <div class="card" id="details-card" style="opacity: 0.6; pointer-events: none; transition: var(--transition-smooth);">
+                <div class="card-title">
+                    <span>Attendance Details</span>
+                    <button class="btn btn-secondary btn-sm" id="btn-compute" onclick="triggerAttendanceCompute()">Compute Live</button>
+                </div>
+                
+                <div id="session-info-header" style="margin-bottom: 1.5rem;">
+                    <h3 id="info-course" style="font-size: 1.4rem; color: white;">Select a session</h3>
+                    <p id="info-location" style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.25rem;">Select a class session from the left list to calculate the student scores.</p>
+                </div>
+
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Student Email</th>
+                                <th>Checked Scans</th>
+                                <th>Match Status</th>
+                                <th>Score</th>
+                                <th>Grade</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="attendance-results-body">
+                            <!-- Filled dynamically -->
+                            <tr>
+                                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 4rem 0;">No session currently loaded.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Override Modal -->
+    <div id="override-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">Manual Attendance Override</div>
+            <form onsubmit="submitOverride(event)">
+                <input type="hidden" id="override-student-id">
+                <div class="input-group">
+                    <label>Target Student</label>
+                    <input class="input-field" type="text" id="override-student-display" readonly style="background-color: var(--bg-tertiary); border-color: transparent;">
+                </div>
+                <div class="input-group">
+                    <label for="override-status">New Attendance Status</label>
+                    <select class="input-field" id="override-status" required>
+                        <option value="PRESENT">PRESENT</option>
+                        <option value="PARTIAL">PARTIAL</option>
+                        <option value="ABSENT">ABSENT</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label for="override-justification">Justification / Reason</label>
+                    <textarea class="input-field" id="override-justification" required rows="3" placeholder="e.g. Student physically present but device WiFi card failed."></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeOverrideModal()">Cancel</button>
+                    <button type="submit" class="btn">Apply Override</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast">Action completed successfully</div>
+
+    <script>
+        let currentToken = null;
+        let selectedSessionId = null;
+        let selectedSessionLocation = null;
+
+        // Check if token exists on load
+        window.addEventListener('load', () => {
+            const token = localStorage.getItem('jwt_token');
+            const email = localStorage.getItem('user_email');
+            if (token) {
+                currentToken = token;
+                document.getElementById('login-view').style.display = 'none';
+                document.getElementById('app-view').style.display = 'grid';
+                const authHeader = document.getElementById('header-auth-controls');
+                authHeader.style.display = 'flex';
+                document.getElementById('user-display').innerText = email;
+                fetchSessions();
+            }
+            // Set default datetimes in session creation to make demo easy
+            const startInput = document.getElementById('scheduled_start');
+            const endInput = document.getElementById('scheduled_end');
+            const now = new Date();
+            startInput.value = now.toISOString().slice(0, 16);
+            now.setHours(now.getHours() + 1);
+            endInput.value = now.toISOString().slice(0, 16);
+        });
+
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.innerText = message;
+            toast.style.borderLeftColor = isError ? 'var(--color-error)' : 'var(--accent-primary)';
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    currentToken = data.access_token;
+                    localStorage.setItem('jwt_token', currentToken);
+                    localStorage.setItem('user_email', email);
+                    
+                    document.getElementById('login-view').style.display = 'none';
+                    document.getElementById('app-view').style.display = 'grid';
+                    const authHeader = document.getElementById('header-auth-controls');
+                    authHeader.style.display = 'flex';
+                    document.getElementById('user-display').innerText = email;
+                    
+                    showToast('Authenticated successfully!');
+                    fetchSessions();
+                } else {
+                    const error = await response.json();
+                    showToast(error.detail || 'Authentication failed', true);
+                }
+            } catch (e) {
+                showToast('Cannot connect to server', true);
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('jwt_token');
+            localStorage.removeItem('user_email');
+            currentToken = null;
+            document.getElementById('login-view').style.display = 'block';
+            document.getElementById('app-view').style.display = 'none';
+            document.getElementById('header-auth-controls').style.display = 'none';
+            showToast('Logged out');
+        }
+
+        async function fetchSessions() {
+            try {
+                const response = await fetch('/sessions', {
+                    headers: { 'Authorization': `Bearer ${currentToken}` }
+                });
+
+                if (response.ok) {
+                    const sessions = await response.json();
+                    const listContainer = document.getElementById('sessions-list');
+                    listContainer.innerHTML = '';
+                    
+                    if (sessions.length === 0) {
+                        listContainer.innerHTML = '<p style="color: var(--text-muted); text-align: center; padding: 2rem 0;">No sessions available.</p>';
+                        return;
+                    }
+
+                    // Sort sessions so active is at the top
+                    sessions.sort((a,b) => {
+                        if (a.status === 'ACTIVE' && b.status !== 'ACTIVE') return -1;
+                        if (a.status !== 'ACTIVE' && b.status === 'ACTIVE') return 1;
+                        return new Date(b.scheduled_start) - new Date(a.scheduled_start);
+                    });
+
+                    sessions.forEach(s => {
+                        const item = document.createElement('div');
+                        item.className = `session-item ${selectedSessionId === s.id ? 'selected' : ''}`;
+                        item.onclick = () => selectSession(s.id, s.course_id, s.location);
+
+                        let badgeClass = 'badge-scheduled';
+                        if (s.status === 'ACTIVE') badgeClass = 'badge-active';
+                        if (s.status === 'COMPLETED') badgeClass = 'badge-completed';
+
+                        const startStr = new Date(s.scheduled_start).toLocaleString();
+
+                        item.innerHTML = `
+                            <div class="session-meta">
+                                <h4>${s.course_id}</h4>
+                                <p>Room: ${s.location}</p>
+                                <p style="font-size: 0.75rem; margin-top: 0.25rem;">Start: ${startStr}</p>
+                            </div>
+                            <span class="badge ${badgeClass}">${s.status}</span>
+                        `;
+                        listContainer.appendChild(item);
+                    });
+                } else if (response.status === 401) {
+                    logout();
+                }
+            } catch (e) {
+                showToast('Failed to fetch sessions', true);
+            }
+        }
+
+        async function handleCreateSession(event) {
+            event.preventDefault();
+            const course_id = document.getElementById('course_id').value;
+            const room_id = document.getElementById('room_id').value;
+            const location = document.getElementById('location').value;
+            const scheduled_start = new Date(document.getElementById('scheduled_start').value).toISOString();
+            const scheduled_end = new Date(document.getElementById('scheduled_end').value).toISOString();
+
+            try {
+                const response = await fetch(`/sessions/create?course_id=${encodeURIComponent(course_id)}&room_id=${encodeURIComponent(room_id)}&location=${encodeURIComponent(location)}&scheduled_start=${encodeURIComponent(scheduled_start)}&scheduled_end=${encodeURIComponent(scheduled_end)}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${currentToken}` }
+                });
+
+                if (response.ok) {
+                    showToast('Session scheduled successfully!');
+                    fetchSessions();
+                    // Clear inputs
+                    document.getElementById('course_id').value = '';
+                    document.getElementById('room_id').value = '';
+                    document.getElementById('location').value = '';
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || 'Failed to create session', true);
+                }
+            } catch (e) {
+                showToast('Network error creating session', true);
+            }
+        }
+
+        async function handleBulkUpload(event) {
+            event.preventDefault();
+            const fileInput = document.getElementById('timetable-file');
+            const file = fileInput.files[0];
+            if (!file) {
+                showToast('Please select a JSON timetable file first', true);
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                try {
+                    const entries = JSON.parse(e.target.result);
+                    if (!Array.isArray(entries)) {
+                        showToast('Timetable file must contain a JSON array of sessions', true);
+                        return;
+                    }
+
+                    const response = await fetch('/sessions/bulk-upload', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${currentToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(entries)
+                    });
+
+                    if (response.ok) {
+                        const res = await response.json();
+                        showToast(`Successfully imported ${res.created} sessions!`);
+                        fetchSessions();
+                        fileInput.value = '';
+                    } else {
+                        const err = await response.json();
+                        showToast(err.detail || 'Failed to import timetable', true);
+                    }
+                } catch (err) {
+                    showToast('Invalid JSON file format', true);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function selectSession(id, course, location) {
+            selectedSessionId = id;
+            selectedSessionLocation = location;
+            
+            // Highlight selected item in list
+            const items = document.querySelectorAll('.session-item');
+            items.forEach(el => el.classList.remove('selected'));
+            event.currentTarget.classList.add('selected');
+
+            // Activate details card
+            const detailsCard = document.getElementById('details-card');
+            detailsCard.style.opacity = '1';
+            detailsCard.style.pointerEvents = 'all';
+
+            document.getElementById('info-course').innerText = `${course} Details`;
+            document.getElementById('info-location').innerText = `Location: ${location} | Session ID: ${id}`;
+            
+            triggerAttendanceCompute();
+        }
+
+        async function triggerAttendanceCompute() {
+            if (!selectedSessionId) return;
+
+            const tableBody = document.getElementById('attendance-results-body');
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 3rem 0;">
+                        Calculating attendance from NeonDB...
+                    </td>
+                </tr>
+            `;
+
+            try {
+                // Post request to compute attendance
+                const response = await fetch(`/compute-attendance/${selectedSessionId}?location_filter=${encodeURIComponent(selectedSessionLocation)}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${currentToken}` }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    tableBody.innerHTML = '';
+                    
+                    if (data.results.length === 0) {
+                        tableBody.innerHTML = `
+                            <tr>
+                                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 3rem 0;">
+                                    No presence logs matched the room fingerprint for this session.
+                                </td>
+                            </tr>
+                        `;
+                        return;
+                    }
+
+                    // For each result, get the user email
+                    // Since backend returns user_id, we fetch user profile or retrieve emails
+                    // To keep things simple, we fetch a list of sessions/users or run a query
+                    // Let's resolve the user_id to student email if possible, or just display the id/email
+                    // The backend returned results has user_id, score, status, etc.
+                    // We can map mock names or request user profiles, let's render the rows.
+                    data.results.forEach(r => {
+                        const row = document.createElement('tr');
+                        let statusClass = 'status-absent';
+                        if (r.status === 'PRESENT') statusClass = 'status-present';
+                        if (r.status === 'PARTIAL') statusClass = 'status-partial';
+
+                        // Resolve student display name (we show ID prefix if email not fetched)
+                        let studentEmail = r.user_id;
+                        // For mock / seeded users we can map:
+                        if (r.user_id === 'ca206bdf-1e7f-4819-8f21-6421154ac446') studentEmail = 'student@example.com';
+                        if (studentEmail.length > 20 && !studentEmail.includes('@')) {
+                            studentEmail = studentEmail.slice(0, 8) + '...';
+                        }
+
+                        row.innerHTML = `
+                            <td style="font-weight: 500; color: white;">${studentEmail}</td>
+                            <td>${r.enter_count} scans</td>
+                            <td><span style="color: ${r.location_match ? 'var(--color-success)' : 'var(--color-error)'}">${r.location_match ? 'Validated' : 'Wrong Room'}</span></td>
+                            <td>${r.score.toFixed(1)}%</td>
+                            <td><span class="${statusClass}">${r.status}</span></td>
+                            <td>
+                                <button class="btn btn-secondary btn-sm" onclick="openOverrideModal('${r.user_id}', '${studentEmail}', '${r.status}')" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">
+                                    Override
+                                </button>
+                            </td>
+                        `;
+                        tableBody.appendChild(row);
+                    });
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || 'Computation failed', true);
+                }
+            } catch (e) {
+                showToast('Failed to connect for calculation', true);
+            }
+        }
+
+        function openOverrideModal(userId, userEmail, currentStatus) {
+            document.getElementById('override-student-id').value = userId;
+            document.getElementById('override-student-display').value = userEmail;
+            document.getElementById('override-status').value = currentStatus;
+            document.getElementById('override-justification').value = '';
+            document.getElementById('override-modal').classList.add('show');
+        }
+
+        function closeOverrideModal() {
+            document.getElementById('override-modal').classList.remove('show');
+        }
+
+        async function submitOverride(event) {
+            event.preventDefault();
+            const studentId = document.getElementById('override-student-id').value;
+            const newStatus = document.getElementById('override-status').value;
+            const justification = document.getElementById('override-justification').value;
+
+            try {
+                const response = await fetch(`/sessions/${selectedSessionId}/override-attendance?student_id=${encodeURIComponent(studentId)}&override_status=${encodeURIComponent(newStatus)}&justification=${encodeURIComponent(justification)}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${currentToken}` }
+                });
+
+                if (response.ok) {
+                    showToast('Override registered successfully!');
+                    closeOverrideModal();
+                    triggerAttendanceCompute();
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || 'Override failed', true);
+                }
+            } catch (e) {
+                showToast('Network error during override submission', true);
+            }
+        }
+    </script>
+</body>
+</html>

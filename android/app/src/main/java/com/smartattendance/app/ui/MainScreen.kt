@@ -137,11 +137,11 @@ fun MainScreen(
         OutlinedTextField(
             value = sessionId,
             onValueChange = onSessionIdChange,
-            label = { Text("Session ID") },
+            label = { Text("Session ID (Optional for Auto-Tracking)") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             placeholder = { Text("e.g. CS101-2026-06-16") },
-            isError = sessionId.isBlank()
+            isError = false
         )
         Spacer(Modifier.height(16.dp))
 
