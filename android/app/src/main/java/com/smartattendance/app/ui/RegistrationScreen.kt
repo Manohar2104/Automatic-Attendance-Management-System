@@ -10,12 +10,13 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun RegistrationScreen(
-    onRegister: (email: String, password: String) -> Unit,
+    onRegister: (email: String, password: String, role: String) -> Unit,
     loading: Boolean,
     error: String?
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var selectedRole by remember { mutableStateOf("STUDENT") }
 
     val isValidEmail = email.contains("@") && email.contains(".")
     val isValidInput = email.isNotBlank() && password.length >= 6 && isValidEmail
@@ -53,6 +54,30 @@ fun RegistrationScreen(
         )
         Spacer(Modifier.height(16.dp))
 
+        Text("Select Role (Only for New Registration):", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = selectedRole == "STUDENT",
+                    onClick = { selectedRole = "STUDENT" }
+                )
+                Text("Student", style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.width(24.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = selectedRole == "FACULTY",
+                    onClick = { selectedRole = "FACULTY" }
+                )
+                Text("Teacher", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+
         if (email.isNotBlank() && !isValidEmail) {
             Text("Enter a valid email address", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(4.dp))
@@ -68,7 +93,7 @@ fun RegistrationScreen(
         }
 
         Button(
-            onClick = { onRegister(email, password) },
+            onClick = { onRegister(email, password, selectedRole) },
             enabled = isValidInput && !loading,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -88,3 +113,4 @@ fun RegistrationScreen(
         }
     }
 }
+

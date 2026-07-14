@@ -13,7 +13,8 @@ import java.util.concurrent.TimeUnit
 
 data class RegisterRequest(
     val email: String,
-    val password: String
+    val password: String,
+    val role: String? = "STUDENT"
 )
 
 data class TokenResponse(
@@ -48,11 +49,44 @@ data class SessionInfo(
     val status: String,
     val location: String,
     val scheduled_start: String,
-    val scheduled_end: String
+    val scheduled_end: String,
+    val teacher_id: String?
 )
 
 data class HealthResponse(
     val status: String
+)
+
+data class UserMeResponse(
+    val id: String,
+    val email: String,
+    val role: String
+)
+
+data class StudentAttendanceResponse(
+    val session_id: String,
+    val course_id: String,
+    val location: String,
+    val status: String,
+    val score: Float,
+    val scheduled_start: String,
+    val scheduled_end: String,
+    val actual_start: String?,
+    val actual_end: String?,
+    val session_status: String
+)
+
+data class AttendanceResult(
+    val user_id: String,
+    val score: Float,
+    val status: String,
+    val enter_count: Int,
+    val location_match: Boolean
+)
+
+data class ComputeAttendanceResponse(
+    val session_id: String,
+    val results: List<AttendanceResult>
 )
 
 interface AttendanceApi {
@@ -79,7 +113,40 @@ interface AttendanceApi {
     suspend fun getSessions(
         @Header("Authorization") token: String
     ): List<SessionInfo>
+
+    @GET("users/me")
+    suspend fun getMe(
+        @Header("Authorization") token: String
+    ): UserMeResponse
+
+    @GET("students")
+    suspend fun getStudents(
+        @Header("Authorization") token: String
+    ): List<UserMeResponse>
+
+    @GET("student/attendance")
+    suspend fun getStudentAttendance(
+        @Header("Authorization") token: String,
+        @retrofit2.http.Query("date") date: String
+    ): List<StudentAttendanceResponse>
+
+    @POST("compute-attendance/{session_id}")
+    suspend fun computeAttendance(
+        @Header("Authorization") token: String,
+        @retrofit2.http.Path("session_id") sessionId: String,
+        @retrofit2.http.Query("location_filter") locationFilter: String?
+    ): ComputeAttendanceResponse
+
+    @POST("sessions/{session_id}/override-attendance")
+    suspend fun overrideAttendance(
+        @Header("Authorization") token: String,
+        @retrofit2.http.Path("session_id") sessionId: String,
+        @retrofit2.http.Query("student_id") studentId: String,
+        @retrofit2.http.Query("override_status") overrideStatus: String,
+        @retrofit2.http.Query("justification") justification: String
+    ): Response<Unit>
 }
+
 
 class ApiClient(private val baseUrl: String) {
 

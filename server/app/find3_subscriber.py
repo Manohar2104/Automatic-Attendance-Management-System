@@ -97,6 +97,25 @@ class Find3Subscriber:
                 row = q.first()
                 user_id = row.user_id if row else None
 
+                ts = (
+                    datetime.datetime.fromtimestamp(
+                        timestamp_ms / 1000, tz=datetime.timezone.utc
+                    )
+                    if timestamp_ms
+                    else datetime.datetime.now(datetime.timezone.utc)
+                )
+
+                # If it is a teacher entering, try auto-starting a timetable session
+                if user_id and event_type == "ENTER" and location:
+                    from .models import User, RoleEnum
+                    q_user = await db.execute(select(User).where(User.id == user_id))
+                    user_obj = q_user.scalars().first()
+                    if user_obj and user_obj.role == RoleEnum.FACULTY:
+                        from .session_scheduler import auto_start_timetable_session
+                        started_sess = await auto_start_timetable_session(db, user_id, location, ts)
+                        if started_sess:
+                            session_id = str(started_sess.id)
+
                 # Resolve session_id from active sessions at this location if not provided
                 if not session_id and location:
                     sess_q = await db.execute(
@@ -110,14 +129,6 @@ class Find3Subscriber:
                     active_sess = sess_q.scalars().first()
                     if active_sess:
                         session_id = str(active_sess.id)
-
-                ts = (
-                    datetime.datetime.fromtimestamp(
-                        timestamp_ms / 1000, tz=datetime.timezone.utc
-                    )
-                    if timestamp_ms
-                    else datetime.datetime.now(datetime.timezone.utc)
-                )
 
                 ev = Event(
                     user_id=user_id,

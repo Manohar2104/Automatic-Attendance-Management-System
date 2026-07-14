@@ -6,6 +6,7 @@ from datetime import datetime
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
+    role: Optional[str] = "STUDENT"
 
 
 class DeviceRegister(BaseModel):
@@ -24,6 +25,7 @@ class PresenceEvent(BaseModel):
     session_id: Optional[str] = None
     location: Optional[str] = None
     event_type: str = "ENTER"
+    timestamp: Optional[datetime] = None
 
 
 class Token(BaseModel):
@@ -35,6 +37,32 @@ class Token(BaseModel):
 class HealthCheck(BaseModel):
     status: str
     now: datetime
+
+
+class TimetableEntryCreate(BaseModel):
+    course_id: str
+    room_id: str
+    location: str
+    day_of_week: str
+    start_time: str
+    end_time: str
+
+
+class TimetableEntryResponse(BaseModel):
+    id: str
+    teacher_id: str
+    course_id: str
+    room_id: str
+    location: str
+    day_of_week: str
+    start_time: str
+    end_time: str
+
+
+class UserMeResponse(BaseModel):
+    id: str
+    email: str
+    role: str
 
 
 class TimetableEntry(BaseModel):

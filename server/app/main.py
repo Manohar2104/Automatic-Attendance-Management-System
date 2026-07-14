@@ -1,8 +1,8 @@
 # ruff: noqa: E402
 from fastapi import FastAPI, Depends, HTTPException, Body, Header
-from typing import List
+from typing import List, Optional
 from contextlib import asynccontextmanager
-from .schemas import HealthCheck, UserCreate, Token
+from .schemas import HealthCheck, UserCreate, Token, UserMeResponse, TimetableEntryCreate, TimetableEntryResponse
 from .db import Base, get_db
 from .config import settings
 from .models import User
@@ -72,6 +72,11 @@ async def lifespan(app):
     eng = get_engine()
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            from sqlalchemy import text
+            await conn.execute(text("ALTER TABLE sessions ADD COLUMN teacher_id UUID"))
+        except Exception:
+            pass
     await start_subscriber(app)
 
     # Initialize Redis
@@ -198,12 +203,21 @@ async def get_dashboard():
 
 @app.post("/register", response_model=Token)
 async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
-    # rudimentary registration
     q = await db.execute(select(User).where(User.email == payload.email))
     existing = q.scalars().first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    user = User(email=payload.email, password_hash=get_password_hash(payload.password))
+    from .models import RoleEnum
+    role_name = (payload.role or "STUDENT").upper()
+    try:
+        user_role = RoleEnum[role_name]
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Invalid role specified")
+    user = User(
+        email=payload.email,
+        password_hash=get_password_hash(payload.password),
+        role=user_role
+    )
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -421,17 +435,49 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
     )
     binding = q.scalars().first()
     user_id = binding.user_id if binding else None
-    # don't invent a user_id for anonymous devices; leave null
+
+    # Resolve event timestamp
+    ts = payload.timestamp or datetime.datetime.now(datetime.timezone.utc)
+    session_id = payload.session_id
+
+    # If it is a teacher entering, try auto-starting a timetable session
+    from .models import RoleEnum, Session, SessionStatus, EventType
+    from sqlalchemy import and_
+    if user_id and payload.event_type == "ENTER" and payload.location:
+        q_user = await db.execute(select(User).where(User.id == user_id))
+        user_obj = q_user.scalars().first()
+        if user_obj and user_obj.role == RoleEnum.FACULTY:
+            from .session_scheduler import auto_start_timetable_session
+            started_sess = await auto_start_timetable_session(db, user_id, payload.location, ts)
+            if started_sess:
+                session_id = str(started_sess.id)
+
+    # Resolve active session from location if not explicitly provided
+    if not session_id and payload.location:
+        sess_q = await db.execute(
+            select(Session).where(
+                and_(
+                    Session.location == payload.location,
+                    Session.status == SessionStatus.ACTIVE,
+                )
+            )
+        )
+        active_sess = sess_q.scalars().first()
+        if active_sess:
+            session_id = str(active_sess.id)
+
+    # Create event
     ev = Event(
         user_id=user_id,
-        session_id=payload.session_id,
+        session_id=session_id,
         type=EventType.ENTER if payload.event_type == "ENTER" else EventType.LEAVE,
         location=payload.location,
+        timestamp=ts,
     )
     db.add(ev)
     # update device binding last_seen and status if bound
     if binding:
-        binding.last_seen_at = datetime.datetime.now(datetime.timezone.utc)
+        binding.last_seen_at = ts
         binding.status = binding.status or "ACTIVE"
         db.add(binding)
     await db.commit()
@@ -588,6 +634,7 @@ async def create_session(
     location: str,
     scheduled_start: str,
     scheduled_end: str,
+    teacher_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_current_user),
 ):
@@ -608,6 +655,13 @@ async def create_session(
             detail="Invalid scheduled_start or scheduled_end format. Use ISO format.",
         )
 
+    t_uuid = None
+    if teacher_id:
+        try:
+            t_uuid = uuid.UUID(teacher_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid teacher_id format")
+
     session = Session(
         course_id=course_id,
         room_id=room_id,
@@ -615,6 +669,7 @@ async def create_session(
         scheduled_start=parsed_start,
         scheduled_end=parsed_end,
         status=SessionStatus.SCHEDULED,
+        teacher_id=t_uuid
     )
     db.add(session)
     await db.commit()
@@ -663,6 +718,13 @@ async def bulk_upload_timetable(
                 status_code=400, detail=f"Invalid entry format: {str(e)}"
             )
 
+        t_uuid = None
+        if entry.get("teacher_id"):
+            try:
+                t_uuid = uuid.UUID(entry.get("teacher_id"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid teacher_id format in bulk upload")
+
         session = Session(
             course_id=entry.get("course_id"),
             room_id=entry.get("room_id"),
@@ -670,6 +732,7 @@ async def bulk_upload_timetable(
             scheduled_start=scheduled_start,
             scheduled_end=scheduled_end,
             status=SessionStatus.SCHEDULED,
+            teacher_id=t_uuid
         )
         db.add(session)
         created.append(session)
@@ -696,7 +759,15 @@ async def list_sessions(
     """List all sessions."""
     from .models import Session
 
-    q = await db.execute(select(Session).order_by(Session.scheduled_start))
+    if current_user.role == "FACULTY":
+        q = await db.execute(
+            select(Session).where(
+                (Session.teacher_id == current_user.id) | (Session.teacher_id == None)
+            ).order_by(Session.scheduled_start)
+        )
+    else:
+        q = await db.execute(select(Session).order_by(Session.scheduled_start))
+        
     sessions = q.scalars().all()
     return [
         {
@@ -706,6 +777,7 @@ async def list_sessions(
             "scheduled_start": s.scheduled_start.isoformat(),
             "scheduled_end": s.scheduled_end.isoformat(),
             "status": s.status.value,
+            "teacher_id": str(s.teacher_id) if s.teacher_id else None,
         }
         for s in sessions
     ]
@@ -791,9 +863,27 @@ async def override_attendance(
     current_user=Depends(require_current_user),
 ):
     """Admin override attendance for a student."""
-    if current_user.role != "ADMIN":
+    # Check authorization: ADMIN or FACULTY who is the teacher of this session
+    from uuid import UUID as UUID_type
+    try:
+        session_uuid = UUID_type(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+    from .models import Session
+    sess_q = await db.execute(select(Session).where(Session.id == session_uuid))
+    session_obj = sess_q.scalars().first()
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if current_user.role == "FACULTY":
+        if session_obj.teacher_id != current_user.id:
+            raise HTTPException(
+                status_code=403, detail="Forbidden: You can only override attendance for your own sessions"
+            )
+    elif current_user.role != "ADMIN":
         raise HTTPException(
-            status_code=403, detail="Only admins can override attendance"
+            status_code=403, detail="Only admins and course teachers can override attendance"
         )
 
     # Find existing attendance record
@@ -856,3 +946,251 @@ async def override_attendance(
         "new_status": attendance.status.value,
         "justification": justification,
     }
+
+
+@app.get("/users/me", response_model=UserMeResponse)
+async def get_me(current_user=Depends(require_current_user)):
+    role_str = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    return UserMeResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        role=role_str
+    )
+
+
+@app.get("/students", response_model=List[UserMeResponse])
+async def list_students(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    if current_user.role not in ["FACULTY", "ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only faculty and admins can view the student list")
+    
+    from .models import RoleEnum
+    q = await db.execute(select(User).where(User.role == RoleEnum.STUDENT).order_by(User.email))
+    rows = q.scalars().all()
+    return [
+        UserMeResponse(
+            id=str(r.id),
+            email=r.email,
+            role=r.role.value if hasattr(r.role, "value") else str(r.role)
+        )
+        for r in rows
+    ]
+
+
+
+@app.post("/timetable", response_model=TimetableEntryResponse)
+async def create_timetable_entry(
+    payload: TimetableEntryCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    if current_user.role not in ["FACULTY", "ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only faculty and admins can manage the timetable")
+    
+    from .models import TimetableEntry
+    entry = TimetableEntry(
+        teacher_id=current_user.id,
+        course_id=payload.course_id,
+        room_id=payload.room_id,
+        location=payload.location,
+        day_of_week=payload.day_of_week,
+        start_time=payload.start_time,
+        end_time=payload.end_time
+    )
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    return TimetableEntryResponse(
+        id=str(entry.id),
+        teacher_id=str(entry.teacher_id),
+        course_id=entry.course_id,
+        room_id=entry.room_id,
+        location=entry.location,
+        day_of_week=entry.day_of_week,
+        start_time=entry.start_time,
+        end_time=entry.end_time
+    )
+
+
+@app.get("/timetable", response_model=List[TimetableEntryResponse])
+async def list_timetable_entries(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    if current_user.role not in ["FACULTY", "ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only faculty and admins can view the timetable")
+    
+    from .models import TimetableEntry
+    if current_user.role == "ADMIN":
+        q = await db.execute(select(TimetableEntry).order_by(TimetableEntry.day_of_week, TimetableEntry.start_time))
+    else:
+        q = await db.execute(select(TimetableEntry).where(TimetableEntry.teacher_id == current_user.id).order_by(TimetableEntry.day_of_week, TimetableEntry.start_time))
+    
+    rows = q.scalars().all()
+    return [
+        TimetableEntryResponse(
+            id=str(r.id),
+            teacher_id=str(r.teacher_id),
+            course_id=r.course_id,
+            room_id=r.room_id,
+            location=r.location,
+            day_of_week=r.day_of_week,
+            start_time=r.start_time,
+            end_time=r.end_time
+        )
+        for r in rows
+    ]
+
+
+@app.delete("/timetable/{entry_id}")
+async def delete_timetable_entry(
+    entry_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    if current_user.role not in ["FACULTY", "ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only faculty and admins can delete timetable entries")
+    
+    from .models import TimetableEntry
+    try:
+        entry_uuid = uuid.UUID(entry_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid timetable entry ID")
+        
+    q = await db.execute(select(TimetableEntry).where(TimetableEntry.id == entry_uuid))
+    entry = q.scalars().first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Timetable entry not found")
+        
+    if current_user.role != "ADMIN" and entry.teacher_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only delete your own timetable entries")
+        
+    await db.delete(entry)
+    await db.commit()
+    return {"status": "deleted"}
+
+
+@app.post("/timetable/bulk")
+async def bulk_create_timetable(
+    entries: List[TimetableEntryCreate] = Body(...),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    if current_user.role not in ["FACULTY", "ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only faculty and admins can bulk upload timetables")
+        
+    from .models import TimetableEntry
+    created = []
+    for payload in entries:
+        entry = TimetableEntry(
+            teacher_id=current_user.id,
+            course_id=payload.course_id,
+            room_id=payload.room_id,
+            location=payload.location,
+            day_of_week=payload.day_of_week,
+            start_time=payload.start_time,
+            end_time=payload.end_time
+        )
+        db.add(entry)
+        created.append(entry)
+        
+    await db.commit()
+    return {"created": len(created)}
+
+
+@app.get("/student/attendance")
+async def get_student_attendance(
+    date: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user)
+):
+    if current_user.role not in ["STUDENT", "ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only students can view daily attendance report")
+        
+    try:
+        if date:
+            target_date = datetime.date.fromisoformat(date)
+        else:
+            target_date = datetime.datetime.now().date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        
+    day_start = datetime.datetime.combine(target_date, datetime.time.min).astimezone()
+    day_end = datetime.datetime.combine(target_date, datetime.time.max).astimezone()
+    day_start_utc = day_start.astimezone(datetime.timezone.utc)
+    day_end_utc = day_end.astimezone(datetime.timezone.utc)
+    
+    from .models import Session, Attendance, Event
+    from sqlalchemy import cast, String, and_
+    
+    sess_stmt = select(Session).where(
+        and_(
+            Session.scheduled_start >= day_start_utc,
+            Session.scheduled_start <= day_end_utc
+        )
+    ).order_by(Session.scheduled_start)
+    
+    sess_result = await db.execute(sess_stmt)
+    sessions = sess_result.scalars().all()
+    
+    session_ids = [str(s.id) for s in sessions]
+    att_stmt = select(Attendance).where(
+        and_(
+            Attendance.student_id == current_user.id,
+            Attendance.session_id.in_(session_ids)
+        )
+    )
+    att_result = await db.execute(att_stmt)
+    attendances = {a.session_id: a for a in att_result.scalars().all()}
+    
+    results = []
+    for s in sessions:
+        sess_id_str = str(s.id)
+        att = attendances.get(sess_id_str)
+        
+        if att:
+            score = att.score
+            status = att.status.value if hasattr(att.status, "value") else str(att.status)
+        else:
+            if s.status in ["ACTIVE", "COMPLETED"]:
+                ev_stmt = select(Event).where(
+                    and_(
+                        Event.user_id == current_user.id,
+                        Event.session_id == sess_id_str
+                    )
+                )
+                ev_result = await db.execute(ev_stmt)
+                student_events = ev_result.scalars().all()
+                
+                enter_count = sum(1 for e in student_events if e.type == "ENTER")
+                
+                duration = int((s.scheduled_end - s.scheduled_start).total_seconds())
+                max_checks = max(1, duration // settings.submission_interval_seconds)
+                score = min(100.0, float((enter_count / max_checks) * 100))
+                
+                if score >= settings.present_threshold_percent:
+                    status = "PRESENT"
+                elif score >= settings.partial_threshold_percent:
+                    status = "PARTIAL"
+                else:
+                    status = "ABSENT"
+            else:
+                score = 0.0
+                status = "ABSENT"
+                
+        results.append({
+            "session_id": sess_id_str,
+            "course_id": s.course_id,
+            "location": s.location,
+            "status": status,
+            "score": score,
+            "scheduled_start": s.scheduled_start.isoformat(),
+            "scheduled_end": s.scheduled_end.isoformat(),
+            "actual_start": s.actual_start.isoformat() if s.actual_start else None,
+            "actual_end": s.actual_end.isoformat() if s.actual_end else None,
+            "session_status": s.status.value if hasattr(s.status, "value") else str(s.status)
+        })
+        
+    return results

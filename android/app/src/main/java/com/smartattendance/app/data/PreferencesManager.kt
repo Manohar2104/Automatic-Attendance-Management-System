@@ -22,6 +22,10 @@ class PreferencesManager(private val context: Context) {
         val SESSION_ID = stringPreferencesKey("session_id")
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val IS_SCANNING = booleanPreferencesKey("is_scanning")
+        val AUTH_TOKEN = stringPreferencesKey("auth_token")
+        val USER_ROLE = stringPreferencesKey("user_role")
+        val USER_EMAIL = stringPreferencesKey("user_email")
+        val USER_ID = stringPreferencesKey("user_id")
 
         const val DEFAULT_SERVER_URL = "http://10.108.234.159:8000"
     }
@@ -50,6 +54,22 @@ class PreferencesManager(private val context: Context) {
         prefs[IS_SCANNING] ?: false
     }
 
+    val authToken: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[AUTH_TOKEN] ?: ""
+    }
+
+    val userRole: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[USER_ROLE] ?: ""
+    }
+
+    val userEmail: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[USER_EMAIL] ?: ""
+    }
+
+    val userId: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[USER_ID] ?: ""
+    }
+
     suspend fun saveServerUrl(url: String) {
         context.dataStore.edit { it[SERVER_URL] = url }
     }
@@ -73,4 +93,25 @@ class PreferencesManager(private val context: Context) {
     suspend fun setScanning(scanning: Boolean) {
         context.dataStore.edit { it[IS_SCANNING] = scanning }
     }
+
+    suspend fun saveAuth(token: String, role: String, email: String, userId: String) {
+        context.dataStore.edit { prefs ->
+            prefs[AUTH_TOKEN] = token
+            prefs[USER_ROLE] = role
+            prefs[USER_EMAIL] = email
+            prefs[USER_ID] = userId
+        }
+    }
+
+    suspend fun clearAuth() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(AUTH_TOKEN)
+            prefs.remove(USER_ROLE)
+            prefs.remove(USER_EMAIL)
+            prefs.remove(USER_ID)
+            prefs[IS_REGISTERED] = false
+            prefs[IS_SCANNING] = false
+        }
+    }
+
 }

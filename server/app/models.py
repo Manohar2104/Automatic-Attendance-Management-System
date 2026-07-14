@@ -75,6 +75,20 @@ class Session(Base):
     status = Column(
         Enum(SessionStatus, native_enum=False), default=SessionStatus.SCHEDULED, nullable=False
     )
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class TimetableEntry(Base):
+    __tablename__ = "timetable_entries"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    course_id = Column(String(255), nullable=False)
+    room_id = Column(String(255), nullable=False)
+    location = Column(String(255), nullable=False)
+    day_of_week = Column(String(10), nullable=False)  # e.g., "Monday"
+    start_time = Column(String(5), nullable=False)    # "HH:MM" e.g. "09:00"
+    end_time = Column(String(5), nullable=False)      # "HH:MM" e.g. "10:30"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

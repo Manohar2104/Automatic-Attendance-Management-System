@@ -59,6 +59,10 @@ class MainActivity : ComponentActivity() {
             var scanning by remember { mutableStateOf(false) }
             var connectionStatus by remember { mutableStateOf("Checking...") }
             var lastSyncTime by remember { mutableStateOf(0L) }
+            var userRole by remember { mutableStateOf("") }
+            var userEmail by remember { mutableStateOf("") }
+            var authToken by remember { mutableStateOf("") }
+            var userId by remember { mutableStateOf("") }
 
             LaunchedEffect(Unit) {
                 try {
@@ -67,8 +71,13 @@ class MainActivity : ComponentActivity() {
                     serverUrl = prefs.serverUrl.first()
                     sessionId = prefs.sessionId.first()
                     lastSyncTime = prefs.lastSyncTime.first()
+                    authToken = prefs.authToken.first()
+                    userRole = prefs.userRole.first()
+                    userEmail = prefs.userEmail.first()
+                    userId = prefs.userId.first()
+
                     val savedScanning = prefs.isScanning.first()
-                    if (isRegistered && savedScanning) {
+                    if (isRegistered && savedScanning && userRole == "STUDENT") {
                         if (hasLocationPermission()) {
                             scanning = true
                             startWiFiScanService()
@@ -95,7 +104,7 @@ class MainActivity : ComponentActivity() {
 
             if (!isRegistered) {
                 RegistrationScreen(
-                    onRegister = { email, password ->
+                    onRegister = { email, password, role ->
                         loading = true
                         error = null
                         lifecycleScope.launch {
@@ -113,26 +122,43 @@ class MainActivity : ComponentActivity() {
                                 }
                                 val token = try {
                                     withContext(Dispatchers.IO) {
-                                        client.api.register(RegisterRequest(email, password))
+                                        client.api.register(RegisterRequest(email, password, role))
                                     }.access_token
                                 } catch (_: Exception) {
                                     withContext(Dispatchers.IO) {
-                                        client.api.login(RegisterRequest(email, password))
+                                        client.api.login(RegisterRequest(email, password, role))
                                     }.access_token
                                 }
 
-                                withContext(Dispatchers.IO) {
-                                    client.api.registerDevice(
-                                        "Bearer $token",
-                                        DeviceRegisterRequest(hash)
-                                    )
+                                // Fetch user details (including role)
+                                val me = withContext(Dispatchers.IO) {
+                                    client.api.getMe("Bearer $token")
                                 }
-                                prefs.saveDeviceId(hash)
+
+                                if (me.role == "STUDENT") {
+                                    withContext(Dispatchers.IO) {
+                                        client.api.registerDevice(
+                                            "Bearer $token",
+                                            DeviceRegisterRequest(hash)
+                                        )
+                                    }
+                                    prefs.saveDeviceId(hash)
+                                    deviceId = hash
+                                } else {
+                                    prefs.saveDeviceId("")
+                                    deviceId = ""
+                                }
+
+                                prefs.saveAuth(token, me.role, me.email, me.id)
                                 prefs.setRegistered(true)
-                                deviceId = hash
+                                
+                                authToken = token
+                                userRole = me.role
+                                userEmail = me.email
+                                userId = me.id
                                 isRegistered = true
 
-                                if (hasLocationPermission()) {
+                                if (me.role == "STUDENT" && hasLocationPermission()) {
                                     scanning = true
                                     prefs.setScanning(true)
                                     startWiFiScanService()
@@ -169,6 +195,9 @@ class MainActivity : ComponentActivity() {
                     scanning = scanning,
                     lastSyncTime = lastSyncTime,
                     connectionStatus = connectionStatus,
+                    userRole = userRole,
+                    userEmail = userEmail,
+                    authToken = authToken,
                     onToggleScanning = { start ->
                         if (start) {
                             if (hasLocationPermission()) {
@@ -193,10 +222,24 @@ class MainActivity : ComponentActivity() {
                     onSessionIdChange = { sid ->
                         sessionId = sid
                         lifecycleScope.launch { prefs.saveSessionId(sid) }
+                    },
+                    onLogout = {
+                        lifecycleScope.launch {
+                            prefs.clearAuth()
+                            isRegistered = false
+                            authToken = ""
+                            userRole = ""
+                            userEmail = ""
+                            userId = ""
+                            scanning = false
+                            stopWiFiScanService()
+                            WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
+                        }
                     }
                 )
             }
         }
+
     }
 
     private suspend fun checkServerConnection(url: String): Boolean {
