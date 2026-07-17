@@ -43,7 +43,7 @@ data class DeviceResponse(
 
 data class PresenceRequest(
     val device_fingerprint: String,
-    val session_id: String,
+    val session_id: String?,
     val event_type: String,
     val location: String
 )

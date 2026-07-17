@@ -24,6 +24,7 @@ class PreferencesManager(private val context: Context) {
         val IS_SCANNING = booleanPreferencesKey("is_scanning")
         val USER_ROLE = stringPreferencesKey("user_role")
         val ACCESS_TOKEN = stringPreferencesKey("access_token")
+        val LAST_LOCATION = stringPreferencesKey("last_location")
 
         const val DEFAULT_SERVER_URL = "http://10.172.148.159:8000"
     }
@@ -60,6 +61,10 @@ class PreferencesManager(private val context: Context) {
         prefs[ACCESS_TOKEN] ?: ""
     }
 
+    val lastLocation: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[LAST_LOCATION] ?: ""
+    }
+
     suspend fun saveServerUrl(url: String) {
         context.dataStore.edit { it[SERVER_URL] = url }
     }
@@ -90,5 +95,9 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun saveAccessToken(token: String) {
         context.dataStore.edit { it[ACCESS_TOKEN] = token }
+    }
+
+    suspend fun saveLastLocation(location: String) {
+        context.dataStore.edit { it[LAST_LOCATION] = location }
     }
 }

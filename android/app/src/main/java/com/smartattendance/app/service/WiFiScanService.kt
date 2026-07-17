@@ -23,6 +23,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import org.json.JSONArray
 
 class WiFiScanService : Service() {
 
@@ -105,7 +106,28 @@ class WiFiScanService : Service() {
                     if (!response.isSuccessful) {
                         Log.e("WiFiScanService", "Find3 upload failed: ${response.code}")
                     } else {
-                        Log.d("WiFiScanService", "Find3 upload success: ${response.body?.string()}")
+                        val body = response.body?.string() ?: ""
+                        Log.d("WiFiScanService", "Find3 upload success: $body")
+                        // Try to parse the guessed location from find3 response
+                        // find3 returns: {"guesses":[{"location":"301","probability":0.9}],...}
+                        try {
+                            val json = JSONObject(body)
+                            val guesses = json.optJSONArray("guesses")
+                            if (guesses != null && guesses.length() > 0) {
+                                val bestGuess = guesses.getJSONObject(0)
+                                val detectedLocation = bestGuess.optString("location", "")
+                                if (detectedLocation.isNotBlank()) {
+                                    prefs.saveLastLocation(detectedLocation)
+                                    Log.d("WiFiScanService", "Location detected: $detectedLocation")
+                                } else {
+                                    Log.d("WiFiScanService", "Find3 returned empty location")
+                                }
+                            } else {
+                                Log.d("WiFiScanService", "No guesses in find3 response yet")
+                            }
+                        } catch (parseEx: Exception) {
+                            Log.w("WiFiScanService", "Could not parse find3 location: ${parseEx.message}")
+                        }
                     }
                 }
             }
@@ -192,6 +214,6 @@ class WiFiScanService : Service() {
     companion object {
         const val SCAN_RESULT_ACTION = "com.smartattendance.SCAN_RESULT"
         const val NOTIFICATION_ID = 1001
-        private const val SCAN_INTERVAL_MS = 30_000L
+        private const val SCAN_INTERVAL_MS = 10_000L
     }
 }

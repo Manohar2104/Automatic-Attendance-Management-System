@@ -23,21 +23,24 @@ class PresenceSubmissionWorker(
         val deviceId = prefs.deviceId.first()
         val serverUrl = prefs.serverUrl.first()
         val sessionId = prefs.sessionId.first()
+        // Read the last detected location from prefs (set by WiFiScanService via find3)
+        val location = prefs.lastLocation.first().ifBlank { "unknown" }
 
-        if (deviceId.isBlank() || sessionId.isBlank()) return Result.success()
+        if (deviceId.isBlank()) return Result.success()
 
         return try {
             val client = ApiClient(serverUrl)
             val response = client.api.sendPresence(
                 PresenceRequest(
                     device_fingerprint = deviceId,
-                    session_id = sessionId,
+                    // Send null session_id so backend resolves it from location + active sessions
+                    session_id = sessionId.ifBlank { null },
                     event_type = "ENTER",
-                    location = "auto-detected"
+                    location = location
                 )
             )
             prefs.updateLastSyncTime()
-            Log.d(TAG, "Presence sent: ${response.id}")
+            Log.d(TAG, "Presence sent (location=$location): ${response.id}")
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "Presence failed: ${e.message}")

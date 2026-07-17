@@ -60,7 +60,7 @@ async def session_scheduler_task():
             await check_and_process_sessions()
         except Exception as e:
             logger.error(f"Error in session scheduler: {e}", exc_info=True)
-        await asyncio.sleep(60)  # Run every minute
+        await asyncio.sleep(15)  # Run every 15 seconds for fast session activation
 
 
 @asynccontextmanager

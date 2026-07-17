@@ -37,7 +37,7 @@ async def check_and_process_sessions(session: AsyncSession = None) -> None:
 
 
 async def _auto_start_sessions(session: AsyncSession) -> None:
-    """Auto-start sessions when scheduled time arrives and faculty is present."""
+    """Auto-start sessions when scheduled time arrives and faculty is present (or find3 not deployed)."""
     now = datetime.now(timezone.utc)
 
     # Find sessions that should be starting (SCHEDULED status, within time window)
@@ -52,10 +52,30 @@ async def _auto_start_sessions(session: AsyncSession) -> None:
     sessions_to_start = result.scalars().all()
 
     for sess in sessions_to_start:
-        # Check if the specific assigned faculty member is present in this location
+        # First try: check if the specific assigned faculty is present in this location
         is_faculty_present = await _is_faculty_present_in_location(
             session, sess.location, faculty_id=sess.faculty_id
         )
+
+        if not is_faculty_present and sess.faculty_id:
+            # Fallback: check if the faculty has ANY recent event (anywhere) —
+            # this covers the case where find3 is deployed but location calibration
+            # hasn't been done yet, so all events land with location="unknown".
+            is_faculty_present = await _has_any_recent_faculty_event(
+                session, faculty_id=sess.faculty_id
+            )
+
+        if not is_faculty_present:
+            # Grace period fallback: if the session is more than 3 minutes past its
+            # scheduled start and still SCHEDULED, auto-start it regardless.
+            # This handles the case where find3 is not deployed at all.
+            minutes_past_start = (now - sess.scheduled_start).total_seconds() / 60
+            if minutes_past_start >= 3:
+                logger.info(
+                    f"Grace-period auto-starting session {sess.id} "
+                    f"({minutes_past_start:.1f}m past start, find3 may be offline)"
+                )
+                is_faculty_present = True
 
         if is_faculty_present:
             logger.info(f"Auto-starting session {sess.id} (location: {sess.location})")
@@ -126,3 +146,29 @@ async def _is_faculty_present_in_location(
     )
 
     return faculty_present
+
+
+async def _has_any_recent_faculty_event(
+    session: AsyncSession, faculty_id, minutes_ago: int = 10
+) -> bool:
+    """
+    Fallback check: has this faculty sent ANY presence event recently,
+    regardless of location? Used when find3 location calibration is incomplete
+    and events land with location='unknown'.
+    """
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    stmt = select(Event).where(
+        and_(
+            Event.user_id == faculty_id,
+            Event.type == EventType.ENTER,
+            Event.timestamp >= cutoff_time,
+        )
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+    has_events = len(events) > 0
+    logger.debug(
+        f"Faculty (id: {faculty_id}) any-location presence: {has_events} "
+        f"({len(events)} events in last {minutes_ago}m)"
+    )
+    return has_events

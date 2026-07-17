@@ -115,6 +115,8 @@ class MainActivity : FragmentActivity() {
             // Helper function to logout
             val handleLogout = {
                 BiometricKeyManager.deleteKey()
+                stopWiFiScanService()
+                WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
                 lifecycleScope.launch {
                     prefs.setRegistered(false)
                     prefs.saveAccessToken("")
@@ -127,6 +129,16 @@ class MainActivity : FragmentActivity() {
                     selectedSessionId = null
                     sessions = emptyList()
                     attendanceResults = null
+                }
+            }
+
+            // Auto-start scanning and presence worker for faculty
+            LaunchedEffect(userRole, isRegistered) {
+                if (isRegistered && userRole == "FACULTY") {
+                    if (hasLocationPermission()) {
+                        startWiFiScanService()
+                        PresenceSubmissionWorker.schedule(this@MainActivity)
+                    }
                 }
             }
 
