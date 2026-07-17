@@ -3,6 +3,7 @@ package com.smartattendance.app.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
@@ -25,7 +26,8 @@ fun MainScreen(
     connectionStatus: String,
     onToggleScanning: (Boolean) -> Unit,
     onServerUrlChange: (String) -> Unit,
-    onSessionIdChange: (String) -> Unit
+    onSessionIdChange: (String) -> Unit,
+    onLogout: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -39,11 +41,21 @@ fun MainScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Smart Attendance", style = MaterialTheme.typography.headlineMedium)
-            Icon(
-                imageVector = if (connectionStatus == "Connected") Icons.Default.Wifi else Icons.Default.WifiOff,
-                contentDescription = "Connection status",
-                tint = if (connectionStatus == "Connected") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (connectionStatus == "Connected") Icons.Default.Wifi else Icons.Default.WifiOff,
+                    contentDescription = "Connection status",
+                    tint = if (connectionStatus == "Connected") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
+                Spacer(Modifier.width(8.dp))
+                IconButton(onClick = onLogout) {
+                    Icon(
+                        imageVector = Icons.Default.ExitToApp,
+                        contentDescription = "Logout",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
 
@@ -94,7 +106,7 @@ fun MainScreen(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Device Info", style = MaterialTheme.typography.titleMedium)
-                Divider(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                HorizontalDivider(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween

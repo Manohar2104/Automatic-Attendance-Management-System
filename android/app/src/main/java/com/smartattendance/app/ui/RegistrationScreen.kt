@@ -10,12 +10,13 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun RegistrationScreen(
-    onRegister: (email: String, password: String) -> Unit,
+    onRegister: (email: String, password: String, role: String) -> Unit,
     loading: Boolean,
     error: String?
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var selectedRole by remember { mutableStateOf("STUDENT") }
 
     val isValidEmail = email.contains("@") && email.contains(".")
     val isValidInput = email.isNotBlank() && password.length >= 6 && isValidEmail
@@ -51,6 +52,32 @@ fun RegistrationScreen(
             visualTransformation = PasswordVisualTransformation(),
             isError = password.isNotBlank() && password.length < 6
         )
+        Spacer(Modifier.height(12.dp))
+
+        // Role Selector Radio Buttons
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Role: ", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = selectedRole == "STUDENT",
+                    onClick = { selectedRole = "STUDENT" }
+                )
+                Text("Student", style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.width(20.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = selectedRole == "FACULTY",
+                    onClick = { selectedRole = "FACULTY" }
+                )
+                Text("Faculty", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         Spacer(Modifier.height(16.dp))
 
         if (email.isNotBlank() && !isValidEmail) {
@@ -68,7 +95,7 @@ fun RegistrationScreen(
         }
 
         Button(
-            onClick = { onRegister(email, password) },
+            onClick = { onRegister(email, password, selectedRole) },
             enabled = isValidInput && !loading,
             modifier = Modifier.fillMaxWidth()
         ) {

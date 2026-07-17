@@ -52,9 +52,9 @@ async def _auto_start_sessions(session: AsyncSession) -> None:
     sessions_to_start = result.scalars().all()
 
     for sess in sessions_to_start:
-        # Check if any faculty member is present in this location
+        # Check if the specific assigned faculty member is present in this location
         is_faculty_present = await _is_faculty_present_in_location(
-            session, sess.location
+            session, sess.location, faculty_id=sess.faculty_id
         )
 
         if is_faculty_present:
@@ -84,24 +84,28 @@ async def _auto_end_sessions(session: AsyncSession) -> None:
 
 
 async def _is_faculty_present_in_location(
-    session: AsyncSession, location: str, minutes_ago: int = 5
+    session: AsyncSession, location: str, faculty_id = None, minutes_ago: int = 5
 ) -> bool:
     """
-    Check if any faculty member has been present in the location recently.
-    Looks at events from the past N minutes.
+    Check if the specific faculty member (or any faculty member, if faculty_id is None)
+    has been present in the location recently. Looks at events from the past N minutes.
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
 
-    # Find faculty users
-    stmt = select(User).where(User.role == RoleEnum.FACULTY)
-    result = await session.execute(stmt)
-    faculty_users = result.scalars().all()
+    if faculty_id:
+        # Check presence only for the assigned faculty
+        faculty_ids = [faculty_id]
+    else:
+        # Fallback to any faculty user
+        stmt = select(User).where(User.role == RoleEnum.FACULTY)
+        result = await session.execute(stmt)
+        faculty_users = result.scalars().all()
 
-    if not faculty_users:
-        logger.debug(f"No faculty members found for location {location}")
-        return False
+        if not faculty_users:
+            logger.debug(f"No faculty members found for location {location}")
+            return False
 
-    faculty_ids = [f.id for f in faculty_users]
+        faculty_ids = [f.id for f in faculty_users]
 
     # Check for recent events from faculty in this location
     stmt = select(Event).where(
@@ -117,7 +121,7 @@ async def _is_faculty_present_in_location(
 
     faculty_present = len(events) > 0
     logger.debug(
-        f"Faculty present in {location}: {faculty_present} "
+        f"Faculty (id: {faculty_id}) present in {location}: {faculty_present} "
         f"({len(events)} recent ENTER events)"
     )
 

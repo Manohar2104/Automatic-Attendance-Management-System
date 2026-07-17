@@ -477,6 +477,10 @@
                             <label for="location">Location Name (FIND3 calibrated label)</label>
                             <input class="input-field" type="text" id="location" required placeholder="e.g. Room 101">
                         </div>
+                        <div class="input-group">
+                            <label for="faculty_email">Assigned Faculty Email (Optional)</label>
+                            <input class="input-field" type="email" id="faculty_email" placeholder="e.g. professor@pes.edu">
+                        </div>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                             <div class="input-group">
                                 <label for="scheduled_start">Start Time</label>
@@ -496,7 +500,7 @@
                     <div style="display: flex; flex-direction: column; gap: 1rem;">
                         <p style="color: var(--text-secondary); font-size: 0.85rem; margin: 0; line-height: 1.4;">
                             Upload a JSON file containing timetable entries.
-                            Format: <code>[{"course_id":"CS101", "room_id":"211", "location":"211", "scheduled_start":"2026-07-08T09:00:00Z", "scheduled_end":"2026-07-08T10:00:00Z"}]</code>
+                            Format: <code>[{"course_id":"CS101", "room_id":"211", "location":"211", "scheduled_start":"2026-07-08T09:00:00Z", "scheduled_end":"2026-07-08T10:00:00Z", "faculty_email":"professor@pes.edu"}]</code>
                         </p>
                         <input class="input-field" type="file" id="timetable-file" accept=".json" style="padding: 0.5rem;">
                         <button onclick="handleBulkUpload(event)" class="btn" style="width: 100%; justify-content: center;">Upload and Import</button>
@@ -694,6 +698,7 @@
                             <div class="session-meta">
                                 <h4>${s.course_id}</h4>
                                 <p>Room: ${s.location}</p>
+                                ${s.faculty_email ? `<p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.15rem;">Faculty: ${s.faculty_email}</p>` : ''}
                                 <p style="font-size: 0.75rem; margin-top: 0.25rem;">Start: ${startStr}</p>
                             </div>
                             <span class="badge ${badgeClass}">${s.status}</span>
@@ -715,9 +720,14 @@
             const location = document.getElementById('location').value;
             const scheduled_start = new Date(document.getElementById('scheduled_start').value).toISOString();
             const scheduled_end = new Date(document.getElementById('scheduled_end').value).toISOString();
+            const faculty_email = document.getElementById('faculty_email').value;
 
             try {
-                const response = await fetch(`/sessions/create?course_id=${encodeURIComponent(course_id)}&room_id=${encodeURIComponent(room_id)}&location=${encodeURIComponent(location)}&scheduled_start=${encodeURIComponent(scheduled_start)}&scheduled_end=${encodeURIComponent(scheduled_end)}`, {
+                let url = `/sessions/create?course_id=${encodeURIComponent(course_id)}&room_id=${encodeURIComponent(room_id)}&location=${encodeURIComponent(location)}&scheduled_start=${encodeURIComponent(scheduled_start)}&scheduled_end=${encodeURIComponent(scheduled_end)}`;
+                if (faculty_email) {
+                    url += `&faculty_email=${encodeURIComponent(faculty_email)}`;
+                }
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${currentToken}` }
                 });
@@ -729,6 +739,7 @@
                     document.getElementById('course_id').value = '';
                     document.getElementById('room_id').value = '';
                     document.getElementById('location').value = '';
+                    document.getElementById('faculty_email').value = '';
                 } else {
                     const err = await response.json();
                     showToast(err.detail || 'Failed to create session', true);
@@ -847,13 +858,7 @@
                         if (r.status === 'PRESENT') statusClass = 'status-present';
                         if (r.status === 'PARTIAL') statusClass = 'status-partial';
 
-                        // Resolve student display name (we show ID prefix if email not fetched)
-                        let studentEmail = r.user_id;
-                        // For mock / seeded users we can map:
-                        if (r.user_id === 'ca206bdf-1e7f-4819-8f21-6421154ac446') studentEmail = 'student@example.com';
-                        if (studentEmail.length > 20 && !studentEmail.includes('@')) {
-                            studentEmail = studentEmail.slice(0, 8) + '...';
-                        }
+                        let studentEmail = r.email || r.user_id;
 
                         row.innerHTML = `
                             <td style="font-weight: 500; color: white;">${studentEmail}</td>

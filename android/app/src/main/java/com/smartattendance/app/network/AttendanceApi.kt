@@ -11,14 +11,24 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
 
+import retrofit2.http.Path
+import retrofit2.http.Query
+
 data class RegisterRequest(
     val email: String,
-    val password: String
+    val password: String,
+    val role: String? = null
 )
 
 data class TokenResponse(
     val access_token: String,
     val token_type: String
+)
+
+data class UserProfileResponse(
+    val id: String,
+    val email: String,
+    val role: String
 )
 
 data class DeviceRegisterRequest(
@@ -51,6 +61,25 @@ data class SessionInfo(
     val scheduled_end: String
 )
 
+data class AttendanceResult(
+    val user_id: String,
+    val email: String,
+    val score: Double,
+    val status: String,
+    val enter_count: Int,
+    val location_match: Boolean
+)
+
+data class ComputeAttendanceResponse(
+    val session_id: String,
+    val duration_seconds: Int,
+    val max_possible_submissions: Int,
+    val bound_devices: Int,
+    val crowd_ok: Boolean,
+    val location_validated: Boolean,
+    val results: List<AttendanceResult>
+)
+
 data class HealthResponse(
     val status: String
 )
@@ -66,6 +95,11 @@ interface AttendanceApi {
     @POST("login")
     suspend fun login(@Body request: RegisterRequest): TokenResponse
 
+    @GET("users/me")
+    suspend fun getProfile(
+        @Header("Authorization") token: String
+    ): UserProfileResponse
+
     @POST("register-device")
     suspend fun registerDevice(
         @Header("Authorization") token: String,
@@ -79,6 +113,21 @@ interface AttendanceApi {
     suspend fun getSessions(
         @Header("Authorization") token: String
     ): List<SessionInfo>
+
+    @POST("compute-attendance/{session_id}")
+    suspend fun computeAttendance(
+        @Path("session_id") sessionId: String,
+        @Query("location_filter") locationFilter: String?
+    ): ComputeAttendanceResponse
+
+    @POST("sessions/{session_id}/override-attendance")
+    suspend fun overrideAttendance(
+        @Header("Authorization") token: String,
+        @Path("session_id") sessionId: String,
+        @Query("student_id") studentId: String,
+        @Query("override_status") overrideStatus: String,
+        @Query("justification") justification: String
+    ): okhttp3.ResponseBody
 }
 
 class ApiClient(private val baseUrl: String) {

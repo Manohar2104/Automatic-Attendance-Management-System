@@ -55,6 +55,9 @@ dependencies {
     // DataStore
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    // Biometric
+    implementation("androidx.biometric:biometric:1.1.0")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
 

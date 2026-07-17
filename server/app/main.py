@@ -1,6 +1,6 @@
 # ruff: noqa: E402
 from fastapi import FastAPI, Depends, HTTPException, Body, Header
-from typing import List
+from typing import List, Optional
 from contextlib import asynccontextmanager
 from .schemas import HealthCheck, UserCreate, Token
 from .db import Base, get_db
@@ -72,6 +72,11 @@ async def lifespan(app):
     eng = get_engine()
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            from sqlalchemy import text
+            await conn.execute(text("ALTER TABLE sessions ADD COLUMN faculty_id UUID REFERENCES users(id)"))
+        except Exception:
+            pass
     await start_subscriber(app)
 
     # Initialize Redis
@@ -203,7 +208,19 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     existing = q.scalars().first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    user = User(email=payload.email, password_hash=get_password_hash(payload.password))
+    
+    from .models import RoleEnum
+    role_val = RoleEnum.STUDENT
+    if payload.role == "FACULTY":
+        role_val = RoleEnum.FACULTY
+    elif payload.role == "ADMIN":
+        role_val = RoleEnum.ADMIN
+
+    user = User(
+        email=payload.email,
+        password_hash=get_password_hash(payload.password),
+        role=role_val
+    )
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -233,6 +250,15 @@ async def login(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     access_token = create_access_token(str(user.id))
     refresh_token = create_refresh_token(str(user.id))
     return Token(access_token=access_token, refresh_token=refresh_token)
+
+
+@app.get("/users/me")
+async def get_current_user_profile(current_user=Depends(require_current_user)):
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "role": current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    }
 
 
 @app.post("/refresh", response_model=Token)
@@ -322,15 +348,15 @@ async def register_device(
     )
     existing = q2.scalars().first()
     if existing:
-        # if already bound to another user, reject
-        if existing.user_id != current_user.id:
+        if existing.user_id != current_user.id and existing.status == "ACTIVE":
             raise HTTPException(
                 status_code=400,
-                detail="Device fingerprint already registered to another user",
+                detail="This device is already registered to another user's account.",
             )
         return {
             "id": str(existing.id),
             "device_fingerprint": existing.device_fingerprint,
+            "status": existing.status.value if hasattr(existing.status, "value") else str(existing.status),
         }
     binding = DeviceBinding(
         user_id=current_user.id, device_fingerprint=payload.device_fingerprint
@@ -543,9 +569,16 @@ async def compute_attendance(
         location_match = location_filter is None or any(
             e.location == location_filter for e in evs
         )
+        
+        # Resolve student email from User table
+        q_user = await db.execute(select(User).where(User.id == user_id))
+        user_obj = q_user.scalars().first()
+        student_email = user_obj.email if user_obj else "unknown@student.com"
+
         results.append(
             AttendanceResult(
                 user_id=str(user_id),
+                email=student_email,
                 score=raw_score,
                 status=final_status.value,
                 enter_count=enter_count,
@@ -588,6 +621,7 @@ async def create_session(
     location: str,
     scheduled_start: str,
     scheduled_end: str,
+    faculty_email: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_current_user),
 ):
@@ -595,7 +629,7 @@ async def create_session(
     if current_user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Only admins can create sessions")
 
-    from .models import Session, SessionStatus
+    from .models import Session, SessionStatus, User, RoleEnum
     from datetime import datetime as dt
 
     try:
@@ -608,6 +642,22 @@ async def create_session(
             detail="Invalid scheduled_start or scheduled_end format. Use ISO format.",
         )
 
+    faculty_id = None
+    if faculty_email:
+        q_fac = await db.execute(select(User).where(User.email == faculty_email))
+        fac = q_fac.scalars().first()
+        if not fac:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Faculty user with email {faculty_email} does not exist.",
+            )
+        if fac.role != RoleEnum.FACULTY:
+            raise HTTPException(
+                status_code=400,
+                detail=f"User {faculty_email} does not have the FACULTY role.",
+            )
+        faculty_id = fac.id
+
     session = Session(
         course_id=course_id,
         room_id=room_id,
@@ -615,6 +665,7 @@ async def create_session(
         scheduled_start=parsed_start,
         scheduled_end=parsed_end,
         status=SessionStatus.SCHEDULED,
+        faculty_id=faculty_id,
     )
     db.add(session)
     await db.commit()
@@ -626,6 +677,7 @@ async def create_session(
         "scheduled_start": session.scheduled_start.isoformat(),
         "scheduled_end": session.scheduled_end.isoformat(),
         "status": session.status.value,
+        "faculty_email": faculty_email,
     }
 
 
@@ -663,6 +715,24 @@ async def bulk_upload_timetable(
                 status_code=400, detail=f"Invalid entry format: {str(e)}"
             )
 
+        faculty_email = entry.get("faculty_email")
+        faculty_id = None
+        if faculty_email:
+            from .models import User, RoleEnum
+            q_fac = await db.execute(select(User).where(User.email == faculty_email))
+            fac = q_fac.scalars().first()
+            if not fac:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Faculty email {faculty_email} not found in database.",
+                )
+            if fac.role != RoleEnum.FACULTY:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"User {faculty_email} is not registered with FACULTY role.",
+                )
+            faculty_id = fac.id
+
         session = Session(
             course_id=entry.get("course_id"),
             room_id=entry.get("room_id"),
@@ -670,6 +740,7 @@ async def bulk_upload_timetable(
             scheduled_start=scheduled_start,
             scheduled_end=scheduled_end,
             status=SessionStatus.SCHEDULED,
+            faculty_id=faculty_id,
         )
         db.add(session)
         created.append(session)
@@ -693,11 +764,24 @@ async def bulk_upload_timetable(
 async def list_sessions(
     db: AsyncSession = Depends(get_db), current_user=Depends(require_current_user)
 ):
-    """List all sessions."""
-    from .models import Session
+    """List all sessions, filtering by assigned faculty if caller has FACULTY role."""
+    from .models import Session, User, RoleEnum
+    from sqlalchemy import or_
 
-    q = await db.execute(select(Session).order_by(Session.scheduled_start))
-    sessions = q.scalars().all()
+    stmt = select(Session, User.email).outerjoin(User, Session.faculty_id == User.id)
+
+    if current_user.role == RoleEnum.FACULTY:
+        stmt = stmt.where(
+            or_(
+                Session.faculty_id == current_user.id,
+                Session.faculty_id.is_(None)
+            )
+        )
+
+    stmt = stmt.order_by(Session.scheduled_start)
+    q = await db.execute(stmt)
+    results = q.all()
+
     return [
         {
             "id": str(s.id),
@@ -706,8 +790,9 @@ async def list_sessions(
             "scheduled_start": s.scheduled_start.isoformat(),
             "scheduled_end": s.scheduled_end.isoformat(),
             "status": s.status.value,
+            "faculty_email": email,
         }
-        for s in sessions
+        for s, email in results
     ]
 
 
@@ -790,10 +875,10 @@ async def override_attendance(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_current_user),
 ):
-    """Admin override attendance for a student."""
-    if current_user.role != "ADMIN":
+    """Admin/Faculty override attendance for a student."""
+    if current_user.role not in ["ADMIN", "FACULTY"]:
         raise HTTPException(
-            status_code=403, detail="Only admins can override attendance"
+            status_code=403, detail="Only admins and faculty can override attendance"
         )
 
     # Find existing attendance record
@@ -837,8 +922,9 @@ async def override_attendance(
     attendance.status = AttendanceStatus[override_status]
     await db.commit()
 
+    role_str = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
     logger.info(
-        f"AUDIT: Admin {current_user.id} overridden student {student_id} attendance in session {session_id} to {override_status}. Justification: {justification}",
+        f"AUDIT: User {current_user.id} ({role_str}) overridden student {student_id} attendance in session {session_id} to {override_status}. Justification: {justification}",
         extra={
             "event_type": "audit_override_attendance",
             "admin_id": str(current_user.id),

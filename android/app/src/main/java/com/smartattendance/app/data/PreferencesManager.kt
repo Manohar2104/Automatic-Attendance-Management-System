@@ -22,8 +22,10 @@ class PreferencesManager(private val context: Context) {
         val SESSION_ID = stringPreferencesKey("session_id")
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val IS_SCANNING = booleanPreferencesKey("is_scanning")
+        val USER_ROLE = stringPreferencesKey("user_role")
+        val ACCESS_TOKEN = stringPreferencesKey("access_token")
 
-        const val DEFAULT_SERVER_URL = "http://10.108.234.159:8000"
+        const val DEFAULT_SERVER_URL = "http://10.172.148.159:8000"
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -50,6 +52,14 @@ class PreferencesManager(private val context: Context) {
         prefs[IS_SCANNING] ?: false
     }
 
+    val userRole: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[USER_ROLE] ?: "STUDENT"
+    }
+
+    val accessToken: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[ACCESS_TOKEN] ?: ""
+    }
+
     suspend fun saveServerUrl(url: String) {
         context.dataStore.edit { it[SERVER_URL] = url }
     }
@@ -72,5 +82,13 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setScanning(scanning: Boolean) {
         context.dataStore.edit { it[IS_SCANNING] = scanning }
+    }
+
+    suspend fun saveUserRole(role: String) {
+        context.dataStore.edit { it[USER_ROLE] = role }
+    }
+
+    suspend fun saveAccessToken(token: String) {
+        context.dataStore.edit { it[ACCESS_TOKEN] = token }
     }
 }

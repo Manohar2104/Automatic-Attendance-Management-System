@@ -6,6 +6,7 @@ from datetime import datetime
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
+    role: Optional[str] = "STUDENT"
 
 
 class DeviceRegister(BaseModel):
@@ -43,6 +44,7 @@ class TimetableEntry(BaseModel):
     location: str
     scheduled_start: str  # ISO format
     scheduled_end: str  # ISO format
+    faculty_email: Optional[str] = None
 
 
 class SessionInfo(BaseModel):
@@ -55,10 +57,12 @@ class SessionInfo(BaseModel):
     actual_start: Optional[datetime]
     actual_end: Optional[datetime]
     status: str
+    faculty_email: Optional[str] = None
 
 
 class AttendanceResult(BaseModel):
     user_id: str
+    email: str
     score: float
     status: str
     enter_count: int
