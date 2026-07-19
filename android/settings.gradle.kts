@@ -16,3 +16,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "SmartAttendance"
 include(":app")
+include(":shared")
+include(":student")
+include(":teacher")

@@ -16,9 +16,26 @@ data class RegisterRequest(
     val password: String
 )
 
+data class BleDeviceRegistrationRequest(
+    val anonymous_ble_id: String,
+    val public_identifier: String? = null,
+    val device_hash: String,
+)
+
+data class BleDeviceRegistrationResponse(
+    val success: Boolean,
+    val student_id: String,
+    val anonymous_ble_id: String,
+)
+
 data class TokenResponse(
     val access_token: String,
+    val refresh_token: String = "",
     val token_type: String
+)
+
+data class RefreshRequest(
+    val refresh_token: String
 )
 
 data class DeviceRegisterRequest(
@@ -55,6 +72,35 @@ data class HealthResponse(
     val status: String
 )
 
+data class ActiveSessionResponse(
+    val active: Boolean,
+    val session: SessionInfo?
+)
+
+data class BleObservationItemRequest(
+    val student_id: String,
+    val rssi: Int,
+    val last_seen: String,
+    val rolling_token: String,
+    val timestamp: String,
+    val hmac: String,
+)
+
+data class BleObservationUploadRequest(
+    val session_id: String,
+    val teacher_id: String,
+    val observed_at: String,
+    val observations: List<BleObservationItemRequest>,
+)
+
+data class BleObservationUploadResponse(
+    val session_id: String,
+    val received: Int,
+    val accepted: Int,
+    val rejected: Int,
+    val processed_at: String,
+)
+
 interface AttendanceApi {
 
     @GET("health")
@@ -72,13 +118,35 @@ interface AttendanceApi {
         @Body request: DeviceRegisterRequest
     ): DeviceResponse
 
+    @POST("api/ble/register")
+    suspend fun registerBleDevice(
+        @Header("Authorization") token: String,
+        @Body request: BleDeviceRegistrationRequest,
+    ): BleDeviceRegistrationResponse
+
     @POST("presence")
     suspend fun sendPresence(@Body request: PresenceRequest): PresenceResponse
+
+    @POST("api/ble/observations")
+    suspend fun uploadBleObservations(
+        @Header("Authorization") token: String,
+        @Body request: BleObservationUploadRequest
+    ): BleObservationUploadResponse
 
     @GET("sessions")
     suspend fun getSessions(
         @Header("Authorization") token: String
     ): List<SessionInfo>
+
+    @GET("api/sessions/active")
+    suspend fun getActiveSession(
+        @Header("Authorization") token: String
+    ): ActiveSessionResponse
+
+    @POST("refresh")
+    suspend fun refresh(
+        @Header("Authorization") token: String
+    ): TokenResponse
 }
 
 class ApiClient(private val baseUrl: String) {

@@ -8,6 +8,10 @@ __pycache__/
 htmlcov/
 venv/
 server/.venv/
+server/.env
+server/.env.example
+
+
 
 # Databases & local files
 *.db

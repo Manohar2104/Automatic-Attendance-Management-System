@@ -61,6 +61,16 @@ services:
       redis:
         condition: service_healthy
 
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: smart-attendance-dashboard
+    ports:
+      - "${DASHBOARD_PORT:-8081}:80"
+    depends_on:
+      - server
+
 volumes:
   postgres_data:
   redis_data:

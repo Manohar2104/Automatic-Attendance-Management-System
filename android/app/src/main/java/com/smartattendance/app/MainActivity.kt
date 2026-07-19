@@ -15,26 +15,32 @@ import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkManager
+import com.smartattendance.app.ble.BlePermissions
+import com.smartattendance.app.ble.BleRegistrationManager
 import com.smartattendance.app.data.DeviceManager
 import com.smartattendance.app.data.PreferencesManager
 import com.smartattendance.app.network.ApiClient
-import com.smartattendance.app.network.DeviceRegisterRequest
 import com.smartattendance.app.network.RegisterRequest
+import com.smartattendance.app.network.TokenResponse
 import com.smartattendance.app.service.PresenceSubmissionWorker
 import com.smartattendance.app.service.WiFiScanService
 import com.smartattendance.app.ui.MainScreen
 import com.smartattendance.app.ui.RegistrationScreen
+import retrofit2.HttpException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
+import com.smartattendance.app.service.BLEAdvertiserService
+import com.smartattendance.app.ble.BleConstants
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var prefs: PreferencesManager
     private lateinit var deviceManager: DeviceManager
+    private lateinit var bleRegistrationManager: BleRegistrationManager
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -45,6 +51,7 @@ class MainActivity : ComponentActivity() {
 
         prefs = PreferencesManager(this)
         deviceManager = DeviceManager(this)
+        bleRegistrationManager = BleRegistrationManager(this)
 
         requestPermissions()
         checkAndStopStaleWork()
@@ -65,13 +72,14 @@ class MainActivity : ComponentActivity() {
                     isRegistered = prefs.isRegistered.first()
                     deviceId = prefs.deviceId.first()
                     serverUrl = prefs.serverUrl.first()
-                    sessionId = prefs.sessionId.first()
+                        sessionId = prefs.sessionId.first()
                     lastSyncTime = prefs.lastSyncTime.first()
                     val savedScanning = prefs.isScanning.first()
                     if (isRegistered && savedScanning) {
                         if (hasLocationPermission()) {
                             scanning = true
                             startWiFiScanService()
+                            startBLEAdvertiserService(sessionId)
                             PresenceSubmissionWorker.schedule(this@MainActivity)
                         } else {
                             prefs.setScanning(false)
@@ -93,6 +101,38 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            LaunchedEffect(isRegistered, scanning, serverUrl) {
+                if (!isRegistered || serverUrl.isBlank()) {
+                    return@LaunchedEffect
+                }
+
+                while (true) {
+                    try {
+                        val activeSessionId = fetchActiveBleSessionId(serverUrl)
+                        if (activeSessionId == AUTH_EXPIRED_MARKER) {
+                            isRegistered = false
+                            scanning = false
+                            prefs.setScanning(false)
+                            stopWiFiScanService()
+                            stopBLEAdvertiserService()
+                            WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
+                            return@LaunchedEffect
+                        }
+                        if (activeSessionId != sessionId) {
+                            sessionId = activeSessionId
+                            prefs.saveSessionId(activeSessionId)
+                            if (scanning) {
+                                stopBLEAdvertiserService()
+                                startBLEAdvertiserService(activeSessionId)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Active session polling failed: ${e.message}")
+                    }
+                    delay(5_000)
+                }
+            }
+
             if (!isRegistered) {
                 RegistrationScreen(
                     onRegister = { email, password ->
@@ -111,23 +151,36 @@ class MainActivity : ComponentActivity() {
                                 val client = withContext(Dispatchers.IO) {
                                     ApiClient(serverUrl)
                                 }
-                                val token = try {
+                                    val tokenResponse = try {
                                     withContext(Dispatchers.IO) {
                                         client.api.register(RegisterRequest(email, password))
-                                    }.access_token
+                                        }
                                 } catch (_: Exception) {
                                     withContext(Dispatchers.IO) {
                                         client.api.login(RegisterRequest(email, password))
-                                    }.access_token
+                                        }
                                 }
+                                    val token = tokenResponse.access_token
 
                                 withContext(Dispatchers.IO) {
-                                    client.api.registerDevice(
-                                        "Bearer $token",
-                                        DeviceRegisterRequest(hash)
-                                    )
+                                    prefs.saveAccessToken(token)
+                                        prefs.saveRefreshToken(tokenResponse.refresh_token)
+                                    prefs.saveStudentEmail(email)
                                 }
                                 prefs.saveDeviceId(hash)
+
+                                val bleRegistered = withContext(Dispatchers.IO) {
+                                    bleRegistrationManager.registerBleDevice(
+                                        serverUrl = serverUrl,
+                                        authToken = token,
+                                        publicIdentifier = email,
+                                    )
+                                }
+                                if (!bleRegistered) {
+                                    error = "BLE device registration failed."
+                                    return@launch
+                                }
+
                                 prefs.setRegistered(true)
                                 deviceId = hash
                                 isRegistered = true
@@ -136,6 +189,7 @@ class MainActivity : ComponentActivity() {
                                     scanning = true
                                     prefs.setScanning(true)
                                     startWiFiScanService()
+                                    startBLEAdvertiserService(sessionId)
                                     PresenceSubmissionWorker.schedule(this@MainActivity)
                                 }
                             } catch (e: java.net.ConnectException) {
@@ -175,6 +229,7 @@ class MainActivity : ComponentActivity() {
                                 scanning = true
                                 lifecycleScope.launch { prefs.setScanning(true) }
                                 startWiFiScanService()
+                                startBLEAdvertiserService(sessionId)
                                 PresenceSubmissionWorker.schedule(this@MainActivity)
                             } else {
                                 requestPermissions()
@@ -183,6 +238,7 @@ class MainActivity : ComponentActivity() {
                             scanning = false
                             lifecycleScope.launch { prefs.setScanning(false) }
                             stopWiFiScanService()
+                            stopBLEAdvertiserService()
                             WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
                         }
                     },
@@ -193,6 +249,10 @@ class MainActivity : ComponentActivity() {
                     onSessionIdChange = { sid ->
                         sessionId = sid
                         lifecycleScope.launch { prefs.saveSessionId(sid) }
+                        if (scanning) {
+                            stopBLEAdvertiserService()
+                            startBLEAdvertiserService(sid)
+                        }
                     }
                 )
             }
@@ -210,9 +270,88 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private suspend fun fetchActiveBleSessionId(url: String): String {
+        val token = prefs.accessToken.first().trim()
+        if (token.isBlank()) {
+            return ""
+        }
+
+        return try {
+            val client = ApiClient(url)
+            val response = client.api.getActiveSession("Bearer $token")
+            if (!response.active) {
+                ""
+            } else {
+                response.session?.id?.trim().orEmpty()
+            }
+        } catch (e: HttpException) {
+            if (e.code() != 401) {
+                Log.d(TAG, "fetchActiveBleSessionId failed: ${e.message()}")
+                return ""
+            }
+
+            val refreshed = refreshStudentToken(url)
+            if (!refreshed) {
+                prefs.clearStudentSession()
+                return AUTH_EXPIRED_MARKER
+            }
+
+            val refreshedToken = prefs.accessToken.first().trim()
+            if (refreshedToken.isBlank()) {
+                prefs.clearStudentSession()
+                return AUTH_EXPIRED_MARKER
+            }
+
+            try {
+                val client = ApiClient(url)
+                val response = client.api.getActiveSession("Bearer $refreshedToken")
+                if (!response.active) "" else response.session?.id?.trim().orEmpty()
+            } catch (retry: Exception) {
+                Log.d(TAG, "fetchActiveBleSessionId retry failed: ${retry.message}")
+                ""
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "fetchActiveBleSessionId failed: ${e.message}")
+            ""
+        }
+    }
+
+    private suspend fun refreshStudentToken(url: String): Boolean {
+        val refreshToken = prefs.refreshToken.first().trim()
+        if (refreshToken.isBlank()) {
+            return false
+        }
+
+        return try {
+            val client = ApiClient(url)
+            val response = client.api.refresh("Bearer $refreshToken")
+            prefs.saveAccessToken(response.access_token)
+            prefs.saveRefreshToken(response.refresh_token)
+            true
+        } catch (e: Exception) {
+            Log.d(TAG, "refreshStudentToken failed: ${e.message}")
+            false
+        }
+    }
+
     private fun startWiFiScanService() {
         val intent = Intent(this, WiFiScanService::class.java)
         ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun startBLEAdvertiserService(sessionId: String) {
+        val intent = Intent(this, BLEAdvertiserService::class.java).apply {
+            action = BleConstants.ACTION_START_ADVERTISING
+            putExtra(BleConstants.EXTRA_SESSION_ID, sessionId)
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun stopBLEAdvertiserService() {
+        val intent = Intent(this, BLEAdvertiserService::class.java).apply {
+            action = BleConstants.ACTION_STOP_ADVERTISING
+        }
+        startService(intent)
     }
 
     private fun stopWiFiScanService() {
@@ -225,6 +364,7 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.INTERNET,
         )
+        permissions.addAll(BlePermissions.requiredPermissions())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -252,5 +392,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "SmartAttendance"
+        private const val AUTH_EXPIRED_MARKER = "__AUTH_EXPIRED__"
     }
 }

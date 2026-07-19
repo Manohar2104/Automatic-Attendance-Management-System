@@ -7,6 +7,12 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     max_devices_per_user: int = 2
+    ble_presence_timeout_seconds: int = 300
+    ble_recovery_window_seconds: int = 300
+    ble_partial_threshold_seconds: int = 600
+    ble_missing_timeout_seconds: int = 300
+    ble_late_threshold_seconds: int = 15
+    ble_scan_upload_interval_seconds: int = 15
     # confidence engine settings
     submission_interval_seconds: int = 30
     present_threshold_percent: int = 85

@@ -3,8 +3,9 @@ from fastapi import FastAPI, Depends, HTTPException, Body, Header
 from typing import List
 from contextlib import asynccontextmanager
 from .schemas import HealthCheck, UserCreate, Token
-from .db import Base, get_db
+from .db import Base, get_db, get_sessionmaker
 from .config import settings
+print("DATABASE_URL =", settings.database_url)
 from .models import User
 from .auth import (
     get_password_hash,
@@ -24,6 +25,10 @@ from .models import (
     Attendance,
     AttendanceStatus,
     AttendanceOverride,
+    BleSession,
+    BleSessionStatus,
+    Session,
+    SessionStatus,
 )
 import uuid
 import time
@@ -49,6 +54,7 @@ from starlette.responses import Response
 from .find3_subscriber import init_subscriber, start_subscriber, stop_subscriber
 from .session_scheduler import check_and_process_sessions
 from .rate_limit import get_redis, close_redis, is_rate_limited, blacklist_token
+from .bootstrap import seed_demo_data
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +78,9 @@ async def lifespan(app):
     eng = get_engine()
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    SessionLocal = get_sessionmaker()
+    async with SessionLocal() as db:
+        await seed_demo_data(db)
     await start_subscriber(app)
 
     # Initialize Redis
@@ -100,6 +109,10 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Smart Attendance Registry", lifespan=lifespan)
+
+from .routes.ble_routes import router as ble_router
+
+app.include_router(ble_router)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -196,6 +209,33 @@ async def get_dashboard():
     return FileResponse(static_file_path)
 
 
+@app.get("/api/sessions/active")
+async def get_active_session(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user),
+):
+    result = await db.execute(
+        select(Session)
+        .where(Session.status == SessionStatus.ACTIVE)
+        .order_by(Session.scheduled_start.desc())
+    )
+    session = result.scalars().first()
+    if session is None:
+        return {"active": False, "session": None}
+
+    return {
+        "active": True,
+        "session": {
+            "id": str(session.id),
+            "course_id": session.course_id,
+            "status": session.status.value if hasattr(session.status, "value") else str(session.status),
+            "location": session.location,
+            "scheduled_start": session.scheduled_start,
+            "scheduled_end": session.scheduled_end,
+        },
+    }
+
+
 @app.post("/register", response_model=Token)
 async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     # rudimentary registration
@@ -221,10 +261,24 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
 async def login(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     q = await db.execute(select(User).where(User.email == payload.email))
     user = q.scalars().first()
+
+    print("========== LOGIN DEBUG ==========")
+    print("EMAIL RECEIVED:", payload.email)
+    print("USER FOUND:", user is not None)
+
+    if user:
+        print("DB EMAIL:", user.email)
+        print("HASH:", user.password_hash)
+        print("PASSWORD MATCH:", verify_password(payload.password, user.password_hash))
+    print("================================")
+
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    
     user_id_var.set(str(user.id))
     logger.info(
         f"User logged in successfully: {payload.email}",

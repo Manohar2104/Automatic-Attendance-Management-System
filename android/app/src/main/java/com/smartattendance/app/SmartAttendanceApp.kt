@@ -28,20 +28,29 @@ class SmartAttendanceApp : Application() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            val wifiChannel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "WiFi Scanning",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Shows when attendance scanning is active"
             }
+            val bleChannel = NotificationChannel(
+                BLE_NOTIFICATION_CHANNEL_ID,
+                "BLE Advertising",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "Shows when BLE advertising is active"
+            }
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(wifiChannel)
+            manager.createNotificationChannel(bleChannel)
         }
     }
 
     companion object {
         const val NOTIFICATION_CHANNEL_ID = "wifi_scan"
+        const val BLE_NOTIFICATION_CHANNEL_ID = "ble_advertising"
         private const val TAG = "SmartAttendance"
     }
 }
