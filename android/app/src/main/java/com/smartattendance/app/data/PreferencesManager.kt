@@ -26,7 +26,7 @@ class PreferencesManager(private val context: Context) {
         val ACCESS_TOKEN = stringPreferencesKey("access_token")
         val LAST_LOCATION = stringPreferencesKey("last_location")
 
-        const val DEFAULT_SERVER_URL = "http://10.172.148.159:8000"
+        const val DEFAULT_SERVER_URL = "http://10.160.91.159:8000"
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->

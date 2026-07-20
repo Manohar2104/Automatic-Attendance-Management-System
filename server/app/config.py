@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     port: int = 8000
     max_devices_per_user: int = 2
     # confidence engine settings
-    submission_interval_seconds: int = 30
+    submission_interval_seconds: int = 60
     present_threshold_percent: int = 85
     partial_threshold_percent: int = 60
     min_crowd_size: int = 3

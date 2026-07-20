@@ -214,6 +214,6 @@ class WiFiScanService : Service() {
     companion object {
         const val SCAN_RESULT_ACTION = "com.smartattendance.SCAN_RESULT"
         const val NOTIFICATION_ID = 1001
-        private const val SCAN_INTERVAL_MS = 10_000L
+        private const val SCAN_INTERVAL_MS = 60_000L
     }
 }
