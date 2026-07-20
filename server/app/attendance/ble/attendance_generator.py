@@ -39,4 +39,6 @@ class AttendanceGenerator:
     def _map_status(self, disposition: BlePresenceDisposition) -> BleAttendanceStatus:
         if disposition == BlePresenceDisposition.PRESENT:
             return BleAttendanceStatus.PRESENT
+        if disposition == BlePresenceDisposition.PARTIAL:
+            return BleAttendanceStatus.PRESENT
         return BleAttendanceStatus.MISSING

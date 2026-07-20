@@ -4,7 +4,7 @@ These repositories expose database access only. Business rules belong in
 services or engines that consume them.
 """
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import (
@@ -235,6 +235,14 @@ class BleAttendanceRepository:
             .order_by(BleAttendance.student_id.asc())
         )
         return result.scalars().all()
+
+    async def delete_by_session_and_student_ids(self, session_id, student_ids: list) -> int:
+        delete_query = delete(BleAttendance).where(BleAttendance.session_id == session_id)
+        if student_ids:
+            delete_query = delete_query.where(~BleAttendance.student_id.in_(student_ids))
+        result = await self.db.execute(delete_query)
+        await self.db.flush()
+        return int(result.rowcount or 0)
 
     async def upsert(self, attendance: BleAttendance) -> BleAttendance:
         existing = await self.get_by_session_and_student(

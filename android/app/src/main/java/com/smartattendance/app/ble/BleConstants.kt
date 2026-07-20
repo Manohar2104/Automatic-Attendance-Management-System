@@ -17,7 +17,7 @@ object BleConstants {
     const val TIMESTAMP_BYTES = 8
     const val HMAC_BYTES = 32
 
-    const val ADVERTISEMENT_INTERVAL_MS = 1_000L
+    const val ADVERTISEMENT_INTERVAL_MS = 1_200L
     const val ROLLING_TOKEN_INTERVAL_MS = 30_000L
     const val ADVERTISING_FAILURE_RETRY_MS = 5_000L
 

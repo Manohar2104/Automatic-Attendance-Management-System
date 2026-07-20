@@ -27,6 +27,7 @@ from .models import (
     AttendanceOverride,
     BleSession,
     BleSessionStatus,
+    RoleEnum,
     Session,
     SessionStatus,
 )
@@ -53,6 +54,8 @@ from starlette.responses import Response
 # initialize find3 subscriber if configured
 from .find3_subscriber import init_subscriber, start_subscriber, stop_subscriber
 from .session_scheduler import check_and_process_sessions
+from .models import BleSession, BleSessionStatus
+from .services.ble_service import BleService
 from .rate_limit import get_redis, close_redis, is_rate_limited, blacklist_token
 from .bootstrap import seed_demo_data
 
@@ -67,6 +70,27 @@ async def session_scheduler_task():
         except Exception as e:
             logger.error(f"Error in session scheduler: {e}", exc_info=True)
         await asyncio.sleep(60)  # Run every minute
+
+
+async def ble_attendance_monitor_task():
+    """Background task that refreshes BLE attendance from the latest stored observations."""
+    SessionLocal = get_sessionmaker()
+    while True:
+        try:
+            async with SessionLocal() as db:
+                service = BleService(db)
+                result = await db.execute(
+                    select(BleSession)
+                    .where(BleSession.status == BleSessionStatus.ACTIVE)
+                    .order_by(BleSession.start_time.desc())
+                )
+                active_sessions = result.scalars().all()
+                for session in active_sessions:
+                    await service.attendance_engine.finalize_session(session.id)
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Error in BLE attendance monitor: {e}", exc_info=True)
+        await asyncio.sleep(5)
 
 
 @asynccontextmanager
@@ -94,6 +118,9 @@ async def lifespan(app):
     scheduler_task = asyncio.create_task(session_scheduler_task())
     app.session_scheduler_task = scheduler_task
 
+    ble_monitor_task = asyncio.create_task(ble_attendance_monitor_task())
+    app.ble_attendance_monitor_task = ble_monitor_task
+
     yield
 
     # shutdown
@@ -101,6 +128,12 @@ async def lifespan(app):
     scheduler_task.cancel()
     try:
         await scheduler_task
+    except asyncio.CancelledError:
+        pass
+
+    ble_monitor_task.cancel()
+    try:
+        await ble_monitor_task
     except asyncio.CancelledError:
         pass
 
@@ -214,14 +247,31 @@ async def get_active_session(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_current_user),
 ):
-    result = await db.execute(
+    legacy_result = await db.execute(
         select(Session)
         .where(Session.status == SessionStatus.ACTIVE)
         .order_by(Session.scheduled_start.desc())
     )
-    session = result.scalars().first()
+    legacy_session = legacy_result.scalars().first()
+
+    session = None
+    if legacy_session is not None:
+        ble_result = await db.execute(select(BleSession).where(BleSession.id == legacy_session.id))
+        session = ble_result.scalars().first()
+
+    if session is None:
+        ble_result = await db.execute(
+            select(BleSession)
+            .where(BleSession.status == BleSessionStatus.ACTIVE)
+            .order_by(BleSession.start_time.desc())
+        )
+        session = ble_result.scalars().first()
+
     if session is None:
         return {"active": False, "session": None}
+
+    legacy_result = await db.execute(select(Session).where(Session.id == session.id))
+    legacy_session = legacy_result.scalars().first()
 
     return {
         "active": True,
@@ -229,9 +279,9 @@ async def get_active_session(
             "id": str(session.id),
             "course_id": session.course_id,
             "status": session.status.value if hasattr(session.status, "value") else str(session.status),
-            "location": session.location,
-            "scheduled_start": session.scheduled_start,
-            "scheduled_end": session.scheduled_end,
+            "location": legacy_session.location if legacy_session is not None else None,
+            "scheduled_start": legacy_session.actual_start if legacy_session and legacy_session.actual_start is not None else (legacy_session.scheduled_start if legacy_session is not None else session.start_time),
+            "scheduled_end": legacy_session.actual_end if legacy_session and legacy_session.actual_end is not None else (legacy_session.scheduled_end if legacy_session is not None else session.end_time),
         },
     }
 

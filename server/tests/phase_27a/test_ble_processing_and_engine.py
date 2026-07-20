@@ -82,7 +82,7 @@ async def test_observation_processor_rejects_invalid_packets():
 
 
 @pytest.mark.asyncio
-async def test_observation_processor_applies_two_minute_per_student_cooldown():
+async def test_observation_processor_keeps_valid_observations_flowing():
     student_id = uuid4()
     session = make_ble_session()
     context = make_session_context(session=session)
@@ -144,12 +144,13 @@ def test_presence_evaluator_counts_present_missing_late_and_absent():
     assert any(state.disposition == BlePresenceDisposition.PARTIAL for state in result.presence_states)
 
 
-def test_attendance_generator_maps_non_present_to_missing():
+def test_attendance_generator_maps_partial_to_present_and_absent_to_missing():
     session_id = uuid4()
     session_start = utcnow(-300)
     result = make_evaluation_result(
         presence_states=[
             make_presence_state(student_id=uuid4(), first_seen=session_start, last_seen=utcnow(), disposition=BlePresenceDisposition.PRESENT),
+            make_presence_state(student_id=uuid4(), first_seen=session_start, last_seen=utcnow(), disposition=BlePresenceDisposition.PARTIAL),
             make_presence_state(student_id=uuid4(), first_seen=None, last_seen=None, disposition=BlePresenceDisposition.ABSENT),
         ],
         present_count=1,
@@ -157,15 +158,23 @@ def test_attendance_generator_maps_non_present_to_missing():
     )
     drafts = AttendanceGenerator().generate(session_id=session_id, session_start_time=session_start, evaluation_result=result)
 
-    assert len(drafts) == 2
+    assert len(drafts) == 3
     assert drafts[0].status == BleAttendanceStatus.PRESENT
-    assert drafts[1].status == BleAttendanceStatus.MISSING
+    assert drafts[1].status == BleAttendanceStatus.PRESENT
+    assert drafts[2].status == BleAttendanceStatus.MISSING
 
 
 @pytest.mark.asyncio
 async def test_attendance_persistence_stores_observations_and_attendance():
     observation_repo = SimpleNamespace(create_many=AsyncMock(return_value=[]))
-    attendance_repo = SimpleNamespace(upsert=AsyncMock(side_effect=lambda attendance: attendance), list_by_session=AsyncMock(return_value=[]), get_by_session_and_student=AsyncMock(return_value=None), create=AsyncMock(side_effect=lambda attendance: attendance), update=AsyncMock(side_effect=lambda attendance: attendance))
+    attendance_repo = SimpleNamespace(
+        upsert=AsyncMock(side_effect=lambda attendance: attendance),
+        list_by_session=AsyncMock(return_value=[]),
+        delete_by_session_and_student_ids=AsyncMock(return_value=0),
+        get_by_session_and_student=AsyncMock(return_value=None),
+        create=AsyncMock(side_effect=lambda attendance: attendance),
+        update=AsyncMock(side_effect=lambda attendance: attendance),
+    )
     persistence = AttendancePersistence(attendance_repository=attendance_repo, observation_repository=observation_repo)
 
     observation = make_ble_observation()
@@ -176,6 +185,41 @@ async def test_attendance_persistence_stores_observations_and_attendance():
 
     assert len(persisted) == 1
     assert persisted[0].student_id == attendance.student_id
+
+
+@pytest.mark.asyncio
+async def test_attendance_persistence_prunes_stale_rows_before_upsert():
+    session_id = uuid4()
+    student_id = uuid4()
+    stale_student_id = uuid4()
+    observation_repo = SimpleNamespace(create_many=AsyncMock(return_value=[]))
+    attendance_repo = SimpleNamespace(
+        upsert=AsyncMock(side_effect=lambda attendance: attendance),
+        list_by_session=AsyncMock(return_value=[make_ble_attendance(session_id=session_id, student_id=stale_student_id)]),
+        delete_by_session_and_student_ids=AsyncMock(return_value=1),
+        get_by_session_and_student=AsyncMock(return_value=None),
+        create=AsyncMock(side_effect=lambda attendance: attendance),
+        update=AsyncMock(side_effect=lambda attendance: attendance),
+    )
+    persistence = AttendancePersistence(attendance_repository=attendance_repo, observation_repository=observation_repo)
+
+    persisted = await persistence.store_attendance(
+        [
+            BleAttendanceDraft(
+                session_id=session_id,
+                student_id=student_id,
+                disposition=BlePresenceDisposition.PRESENT,
+                status=BleAttendanceStatus.PRESENT,
+                first_seen=utcnow(),
+                last_seen=utcnow(),
+            )
+        ],
+        session_id=session_id,
+    )
+
+    attendance_repo.delete_by_session_and_student_ids.assert_awaited_once_with(session_id, [student_id])
+    assert len(persisted) == 1
+    assert persisted[0].student_id == student_id
 
 
 @pytest.mark.asyncio

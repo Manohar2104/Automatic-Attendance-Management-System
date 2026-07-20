@@ -177,7 +177,7 @@ class BLEScannerService : Service() {
         )
 
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
             .build()
 
         Log.d(TAG, "Calling startForeground() with type=connectedDevice")

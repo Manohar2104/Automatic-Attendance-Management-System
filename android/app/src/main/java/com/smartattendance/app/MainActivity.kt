@@ -118,6 +118,10 @@ class MainActivity : ComponentActivity() {
                             WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
                             return@LaunchedEffect
                         }
+                        if (activeSessionId == null) {
+                            delay(5_000)
+                            continue
+                        }
                         if (activeSessionId != sessionId) {
                             sessionId = activeSessionId
                             prefs.saveSessionId(activeSessionId)
@@ -270,7 +274,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun fetchActiveBleSessionId(url: String): String {
+    private suspend fun fetchActiveBleSessionId(url: String): String? {
         val token = prefs.accessToken.first().trim()
         if (token.isBlank()) {
             return ""
@@ -286,8 +290,8 @@ class MainActivity : ComponentActivity() {
             }
         } catch (e: HttpException) {
             if (e.code() != 401) {
-                Log.d(TAG, "fetchActiveBleSessionId failed: ${e.message()}")
-                return ""
+                Log.w(TAG, "fetchActiveBleSessionId HTTP ${e.code()} failed: ${e.message()}")
+                return null
             }
 
             val refreshed = refreshStudentToken(url)
@@ -308,11 +312,11 @@ class MainActivity : ComponentActivity() {
                 if (!response.active) "" else response.session?.id?.trim().orEmpty()
             } catch (retry: Exception) {
                 Log.d(TAG, "fetchActiveBleSessionId retry failed: ${retry.message}")
-                ""
+                null
             }
         } catch (e: Exception) {
             Log.d(TAG, "fetchActiveBleSessionId failed: ${e.message}")
-            ""
+            null
         }
     }
 

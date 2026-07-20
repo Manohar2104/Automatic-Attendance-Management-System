@@ -4,12 +4,12 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.smartattendance.teacher.ble.BleLiveMetricsStore
 import com.smartattendance.teacher.repository.TeacherRepository
 import com.smartattendance.teacher.ui.dashboard.TeacherDashboardUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -34,7 +34,6 @@ class LiveAttendanceViewModel(
     init {
         loadAttendance()
         startAutoRefresh()
-        observeLiveMetrics()
     }
 
     private fun startAutoRefresh() {
@@ -85,8 +84,6 @@ class LiveAttendanceViewModel(
                 query = _uiState.value.searchQuery,
                 filter = _uiState.value.selectedFilter,
             )
-            val liveMetrics = BleLiveMetricsStore.metrics.value
-
             val sessionStartTime = summary?.session?.start_time ?: "--"
             val sessionStatus = summary?.session?.status
                 ?: dashboardState?.sessionStatus
@@ -103,24 +100,20 @@ class LiveAttendanceViewModel(
                 sessionStartedAt = sessionStartTime,
                 sessionDuration = calculateDuration(sessionStartTime),
                 registeredDevices = dashboardState?.registeredDevices ?: 0,
-                studentsSeen = maxOf(summary?.detected_students ?: dashboardState?.studentsSeen ?: students.size, liveMetrics.studentsSeenCount),
-                packetsReceived = maxOf(summary?.packets_received ?: dashboardState?.packetsReceived ?: 0, liveMetrics.packetsReceived.toInt()),
-                packetsAccepted = maxOf(observations?.observations?.size ?: 0, liveMetrics.packetsAccepted.toInt()),
+                studentsSeen = summary?.detected_students ?: students.size,
+                packetsReceived = summary?.packets_received ?: (observations?.observations?.size ?: 0),
+                packetsAccepted = observations?.observations?.size ?: 0,
                 cooldownIntervalMinutes = 2,
-                lastPacketReceivedAt = if (liveMetrics.lastPacketReceivedAtMillis > 0L) {
-                    java.time.Instant.ofEpochMilli(liveMetrics.lastPacketReceivedAtMillis).toString()
-                } else {
-                    summary?.latest_observation
-                        ?: observations?.observations?.maxByOrNull { it.observation_timestamp }?.observation_timestamp
-                        ?: presence?.records?.maxByOrNull { it.last_seen }?.last_seen
-                        ?: "--"
-                },
+                lastPacketReceivedAt = summary?.latest_observation
+                    ?: observations?.observations?.maxByOrNull { it.observation_timestamp }?.observation_timestamp
+                    ?: presence?.records?.maxByOrNull { it.last_seen }?.last_seen
+                    ?: "--",
                 presentCount = summary?.present
                     ?: presence?.summary?.present
-                    ?: students.count { it.status == AttendanceStatus.PRESENT },
+                    ?: 0,
                 absentCount = summary?.missing
                     ?: presence?.summary?.missing
-                    ?: students.count { it.status == AttendanceStatus.ABSENT },
+                    ?: 0,
                 detectedCount = summary?.detected_students ?: students.size,
                 sessionActive = sessionStatus.equals("ACTIVE", ignoreCase = true),
                 students = filteredStudents,
@@ -131,23 +124,6 @@ class LiveAttendanceViewModel(
                 TAG,
                 "Live metrics update sessionId=$sessionId packetsReceived=${_uiState.value.packetsReceived} packetsAccepted=${_uiState.value.packetsAccepted} studentsSeen=${_uiState.value.studentsSeen} present=${_uiState.value.presentCount} missing=${_uiState.value.absentCount} averageRssi=${students.map { it.averageRssi }.takeIf { it.isNotEmpty() }?.average() ?: Double.NaN} lastPacketTime=${_uiState.value.lastPacketReceivedAt}",
             )
-        }
-    }
-
-    private fun observeLiveMetrics() {
-        viewModelScope.launch {
-            BleLiveMetricsStore.metrics.collect { liveMetrics ->
-                _uiState.value = _uiState.value.copy(
-                    packetsReceived = maxOf(_uiState.value.packetsReceived, liveMetrics.packetsReceived.toInt()),
-                    packetsAccepted = maxOf(_uiState.value.packetsAccepted, liveMetrics.packetsAccepted.toInt()),
-                    studentsSeen = maxOf(_uiState.value.studentsSeen, liveMetrics.studentsSeenCount),
-                    lastPacketReceivedAt = if (liveMetrics.lastPacketReceivedAtMillis > 0L) {
-                        java.time.Instant.ofEpochMilli(liveMetrics.lastPacketReceivedAtMillis).toString()
-                    } else {
-                        _uiState.value.lastPacketReceivedAt
-                    },
-                )
-            }
         }
     }
 
@@ -223,40 +199,49 @@ class LiveAttendanceViewModel(
         observations: com.smartattendance.shared.network.BleObservationsResponse?,
         registeredEmailMap: Map<String, String>,
     ): List<StudentAttendanceUi> {
-        val observationByStudent = observations?.observations.orEmpty()
-            .groupBy { it.student_id }
-            .mapValues { entry -> entry.value.maxByOrNull { it.observation_timestamp } }
-
         val presenceByStudent = presence?.records.orEmpty()
             .associateBy { it.student_id }
 
+        val latestObservationByStudent = observations?.observations.orEmpty()
+            .groupBy { it.student_id }
+            .mapValues { (_, items) ->
+                items.maxByOrNull { it.observation_timestamp }
+            }
+
         val studentIds = linkedSetOf<String>()
         studentIds.addAll(presenceByStudent.keys)
-        studentIds.addAll(observationByStudent.keys)
+        studentIds.addAll(latestObservationByStudent.keys)
 
         return studentIds.map { studentId ->
             val presenceRecord = presenceByStudent[studentId]
-            val observationRecord = observationByStudent[studentId]
-            val rssi = observationRecord?.rssi ?: 0
+            val latestObservation = latestObservationByStudent[studentId]
+            val rssi = latestObservation?.rssi ?: 0
+            val backendLastSeen = presenceRecord?.last_seen ?: latestObservation?.last_seen ?: "--"
+            val lastSeen = backendLastSeen
+            val lastAcceptedPacketTime = latestObservation?.observation_timestamp ?: backendLastSeen
+            val anonymousCode = latestObservation?.anonymous_ble_id ?: "--"
+            val packetsReceived = latestObservation?.advertisement_count ?: 0
+            val confidence = when {
+                presenceRecord?.status.equals("PRESENT", ignoreCase = true) ->
+                    maxOf(0, minOf(100, 100 + rssi + 55))
+                presenceRecord?.status.equals("PARTIAL", ignoreCase = true) -> 60
+                presenceRecord?.status.equals("MISSING", ignoreCase = true) -> 0
+                latestObservation != null -> maxOf(0, minOf(100, 100 + rssi + 55))
+                else -> 0
+            }
 
             StudentAttendanceUi(
                 studentId = studentId,
                 usn = studentId,
-                studentName = observationRecord?.student_name
-                    ?: presenceRecord?.student_name
-                    ?: studentId,
+                studentName = presenceRecord?.student_name ?: studentId,
                 studentEmail = registeredEmailMap[studentId] ?: "--",
-                anonymousCode = observationRecord?.anonymous_ble_id ?: "--",
-                status = mapStatus(
-                    presenceStatus = presenceRecord?.status,
-                    observationCount = observationRecord?.advertisement_count ?: 0,
-                    rssi = rssi,
-                ),
-                confidence = if (rssi == 0) 0 else max(0, min(100, 100 + rssi + 55)),
+                anonymousCode = anonymousCode ?: "--",
+                status = mapStatus(presenceStatus = presenceRecord?.status),
+                confidence = confidence,
                 averageRssi = rssi,
-                packetsReceived = observationRecord?.advertisement_count ?: 0,
-                lastSeen = presenceRecord?.last_seen ?: observationRecord?.last_seen ?: "--",
-                lastAcceptedPacketTime = observationRecord?.observation_timestamp ?: "--",
+                packetsReceived = packetsReceived,
+                lastSeen = lastSeen,
+                lastAcceptedPacketTime = lastAcceptedPacketTime,
             )
         }.sortedBy { it.studentName.lowercase() }
     }
@@ -287,21 +272,15 @@ class LiveAttendanceViewModel(
 
     private fun mapStatus(
         presenceStatus: String?,
-        observationCount: Int,
-        rssi: Int,
     ): AttendanceStatus {
         return when (presenceStatus?.uppercase()) {
             "PRESENT" -> AttendanceStatus.PRESENT
             "ABSENT" -> AttendanceStatus.ABSENT
             "LATE" -> AttendanceStatus.LATE
+            "MISSING" -> AttendanceStatus.ABSENT
+            "PARTIAL" -> AttendanceStatus.LOW_CONFIDENCE
             else -> {
-                if (observationCount > 0 && rssi < -80) {
-                    AttendanceStatus.LOW_CONFIDENCE
-                } else if (observationCount > 0) {
-                    AttendanceStatus.PRESENT
-                } else {
-                    AttendanceStatus.ABSENT
-                }
+                AttendanceStatus.ABSENT
             }
         }
     }

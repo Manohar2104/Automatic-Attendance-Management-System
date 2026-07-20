@@ -30,16 +30,6 @@ class ObservationProcessor {
             return null
         }
 
-        Log.d(
-            TAG,
-            "Rolling token extracted anonymousBleId=$anonymousBleDeviceId rollingToken=$rollingTokenHex studentId=$resolvedStudentId sessionId=${sessionId ?: "<unknown>"} rssi=${parsedAdvertisement.rssi} timestamp=${Instant.ofEpochMilli(timestampMillis)}",
-        )
-        Log.d(
-            TAG,
-            "Observation created student=$resolvedStudentId session=${sessionId ?: "<unknown>"} anonymousId=$anonymousBleDeviceId rssi=${parsedAdvertisement.rssi} confidence=${maxOf(0, minOf(100, 100 + parsedAdvertisement.rssi + 55))} timestamp=${Instant.ofEpochMilli(timestampMillis)}",
-        )
-        Log.d(TAG, "Validation result=ACCEPTED anonymousBleId=$anonymousBleDeviceId studentId=$resolvedStudentId")
-
         return ParsedObservation(
             studentId = resolvedStudentId,
             anonymousBleDeviceId = anonymousBleDeviceId,

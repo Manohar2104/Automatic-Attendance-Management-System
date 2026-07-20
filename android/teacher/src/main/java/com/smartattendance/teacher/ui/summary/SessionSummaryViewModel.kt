@@ -54,7 +54,7 @@ class SessionSummaryViewModel(application: Application) : AndroidViewModel(appli
 
             val summary = repository.getSummary(resolvedSessionId).getOrNull()
             val dashboard = repository.getDashboardState().getOrNull()
-            val observations = repository.getObservations(resolvedSessionId).getOrNull()
+            val presence = repository.getPresence(resolvedSessionId).getOrNull()
 
             if (summary == null) {
                 _uiState.value = _uiState.value.copy(
@@ -64,18 +64,28 @@ class SessionSummaryViewModel(application: Application) : AndroidViewModel(appli
                 return@launch
             }
 
-            val records = observations?.observations.orEmpty().map { observation ->
+            val records = presence?.records.orEmpty().map { record ->
                 AttendanceRecordUi(
-                    studentId = observation.student_id,
-                    studentName = observation.student_name ?: observation.student_id,
-                    usn = observation.student_id,
-                    status = AttendanceStatus.PRESENT,
-                    confidence = kotlin.math.max(0, kotlin.math.min(100, 100 + observation.rssi + 55)),
+                    studentId = record.student_id,
+                    studentName = record.student_name ?: record.student_id,
+                    usn = record.student_id,
+                    status = when (record.status.uppercase()) {
+                        "PRESENT" -> AttendanceStatus.PRESENT
+                        "MISSING" -> AttendanceStatus.ABSENT
+                        "LATE" -> AttendanceStatus.LATE
+                        else -> AttendanceStatus.ABSENT
+                    },
+                    confidence = when (record.status.uppercase()) {
+                        "PRESENT" -> 100
+                        "MISSING" -> 0
+                        "LATE" -> 50
+                        else -> 0
+                    },
                     manuallyModified = false,
                 )
             }
 
-            val totalAttendance = (summary.present + summary.missing).coerceAtLeast(1)
+            val totalAttendance = (presence?.summary?.present.orZero() + presence?.summary?.missing.orZero()).coerceAtLeast(1)
             val attendancePct = (summary.present.toFloat() / totalAttendance.toFloat()) * 100f
 
             _uiState.value = _uiState.value.copy(
@@ -88,11 +98,11 @@ class SessionSummaryViewModel(application: Application) : AndroidViewModel(appli
                 studentsSeen = summary.detected_students,
                 attendancePercentage = attendancePct,
                 totalPackets = summary.packets_received,
-                totalObservations = observations?.observations?.sumOf { it.advertisement_count } ?: 0,
+                totalObservations = summary.packets_received,
                 startTime = summary.session.start_time,
                 endTime = summary.session.end_time ?: "--",
-                present = summary.present,
-                missing = summary.missing,
+                present = presence?.summary?.present ?: summary.present,
+                missing = presence?.summary?.missing ?: summary.missing,
                 attendanceRecords = records,
                 isLoading = false,
                 errorMessage = null,
@@ -191,5 +201,7 @@ class SessionSummaryViewModel(application: Application) : AndroidViewModel(appli
             "00:00:00"
         }
     }
+
+    private fun Int?.orZero(): Int = this ?: 0
 
 }

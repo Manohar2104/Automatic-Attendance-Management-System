@@ -53,6 +53,10 @@ class ObservationUploader(
         hmacHex: String,
     ) {
         mutex.withLock {
+            if (queue.size >= BleScannerConstants.MAX_PENDING_OBSERVATIONS) {
+                queue.removeFirst()
+                Log.w(TAG, "Upload queue full; dropping oldest observation pendingSize=${queue.size}")
+            }
             queue.addLast(
                 PendingObservation(
                     studentId = studentId,

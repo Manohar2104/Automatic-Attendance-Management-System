@@ -10,7 +10,7 @@ object BleScannerConstants {
     const val EXTRA_REGISTERED_DEVICES_JSON = "extra_registered_devices_json"
 
     const val BLE_SCAN_NOTIFICATION_ID = 2_101
-    const val SCAN_BATCH_UPLOAD_INTERVAL_MS = 15_000L
+    const val SCAN_BATCH_UPLOAD_INTERVAL_MS = 2_500L
     const val SCAN_FAILURE_RETRY_MS = 5_000L
     const val MAX_PENDING_OBSERVATIONS = 50
     const val MAX_REGISTRATION_JSON_LENGTH = 65_536

@@ -31,38 +31,39 @@ class ObservationUploader(
     private var batchJob: Job? = null
 
     fun start() {
+        Log.d(TAG, "Uploader start requested workerActive=${batchJob?.isActive == true} workerPresent=${batchJob != null}")
         if (batchJob != null) return
         batchJob = scope.launch {
+            Log.d(TAG, "Uploader worker started jobActive=$isActive")
             while (isActive) {
                 delay(BleScannerConstants.SCAN_BATCH_UPLOAD_INTERVAL_MS)
+                Log.d(TAG, "Uploader worker wake jobActive=$isActive")
                 flushPendingObservations()
             }
+            Log.d(TAG, "Uploader worker finished jobActive=$isActive")
         }
     }
 
     suspend fun enqueue(observation: ParsedObservation) {
         mutex.withLock {
+            if (queue.size >= BleScannerConstants.MAX_PENDING_OBSERVATIONS) {
+                queue.removeFirst()
+                Log.w(TAG, "Upload queue full; dropping oldest observation pendingSize=${queue.size}")
+            }
             queue.addLast(observation)
-            Log.d(
-                TAG,
-                "Observation created anonymousBleId=${observation.anonymousBleDeviceId} rollingToken=${observation.rollingToken} rssi=${observation.rssi} timestamp=${observation.timestampMillis} queueSize=${queue.size}",
-            )
         }
 
         val pendingSize = pendingCount()
-        Log.d(TAG, "Upload queue size=$pendingSize")
+        Log.d(TAG, "Upload queue size=$pendingSize workerActive=${batchJob?.isActive == true}")
 
-        if (pendingSize == 1) {
-            scope.launch {
-                flushPendingObservations()
-            }
-        } else if (pendingSize >= BleScannerConstants.MAX_PENDING_OBSERVATIONS) {
+        if (pendingSize >= BleScannerConstants.MAX_PENDING_OBSERVATIONS) {
+            Log.d(TAG, "Uploader queue reached threshold pendingSize=$pendingSize workerActive=${batchJob?.isActive == true}")
             flushPendingObservations()
         }
     }
 
     suspend fun flushPendingObservations() {
-        Log.d(TAG, "Upload requested")
+        Log.d(TAG, "Upload requested workerActive=${batchJob?.isActive == true} queueSize=${pendingCount()}")
         val pendingBatch = mutex.withLock {
             if (queue.isEmpty()) {
                 Log.d(TAG, "No pending BLE observations to upload")
@@ -81,65 +82,81 @@ class ObservationUploader(
             return
         }
 
-        val request = buildUploadRequest(pendingBatch)
-        if (request == null) {
-            Log.d(TAG, "BLE observation upload skipped because request could not be built")
-            requeue(pendingBatch)
-            return
+        val fallbackSessionId = preferencesManager.activeSessionId.first().trim()
+
+        val batchesBySession = pendingBatch.groupBy { observation ->
+            observation.sessionId?.takeIf { it.isNotBlank() } ?: fallbackSessionId
         }
 
-        logBatch(pendingBatch)
-        Log.d(TAG, "Sending observation batch size=${pendingBatch.size}")
-        val bearerToken = preferencesManager.accessToken.first().trim()
-        Log.d(
-            TAG,
-            "POST /api/ble/observations headers={Authorization=${if (bearerToken.isBlank()) "<missing>" else "Bearer <present>"}, Content-Type=application/json} jwtAvailable=${bearerToken.isNotBlank()} sessionId=${request.session_id} teacherId=${request.teacher_id}",
-        )
-        Log.d(
-            TAG,
-            "POST /api/ble/observations payload=${buildJson(request)}",
-        )
-        val uploadStartedAt = System.currentTimeMillis()
-        val uploadResult = teacherRepository.uploadObservation(request)
-        val elapsedMs = System.currentTimeMillis() - uploadStartedAt
-        if (uploadResult.isSuccess) {
-            val response = uploadResult.getOrNull()
-            Log.d(
-                TAG,
-                "HTTP Status=200 elapsedMs=$elapsedMs responseBody=${response?.let { JSONObject().put("session_id", it.session_id).put("received", it.received).put("accepted", it.accepted).put("rejected", it.rejected).put("processed_at", it.processed_at).toString() } ?: "<null>"}",
-            )
-            return
-        }
-
-        val failure = uploadResult.exceptionOrNull()
-        if (isRetryable(failure)) {
-            Log.d(TAG, "Upload failed; retrying once reason=${retryReason(failure)} elapsedMs=$elapsedMs", failure)
-            val retryStartedAt = System.currentTimeMillis()
-            val retryResult = teacherRepository.uploadObservation(request)
-            val retryElapsedMs = System.currentTimeMillis() - retryStartedAt
-            if (retryResult.isSuccess) {
-                val response = retryResult.getOrNull()
-                Log.d(
-                    TAG,
-                    "HTTP Status=200 elapsedMs=$retryElapsedMs responseBody=${response?.let { JSONObject().put("session_id", it.session_id).put("received", it.received).put("accepted", it.accepted).put("rejected", it.rejected).put("processed_at", it.processed_at).toString() } ?: "<null>"}",
-                )
-                return
+        for ((sessionId, sessionBatch) in batchesBySession) {
+            val request = buildUploadRequest(sessionBatch, sessionId)
+            if (request == null) {
+                Log.d(TAG, "BLE observation upload skipped because request could not be built sessionId=$sessionId")
+                continue
             }
 
-            logFailure(retryResult.exceptionOrNull(), "retry")
-            requeue(pendingBatch)
-            return
-        }
+            logBatch(sessionBatch)
+            Log.d(TAG, "Sending observation batch size=${sessionBatch.size}")
+            val bearerToken = preferencesManager.accessToken.first().trim()
+            Log.d(
+                TAG,
+                "POST /api/ble/observations headers={Authorization=${if (bearerToken.isBlank()) "<missing>" else "Bearer <present>"}, Content-Type=application/json} jwtAvailable=${bearerToken.isNotBlank()} sessionId=${request.session_id} teacherId=${request.teacher_id}",
+            )
+            Log.d(
+                TAG,
+                "POST /api/ble/observations payload=${buildJson(request)}",
+            )
+            val uploadStartedAt = System.currentTimeMillis()
+            val uploadResult = teacherRepository.uploadObservation(request)
+            val elapsedMs = System.currentTimeMillis() - uploadStartedAt
+            if (uploadResult.isSuccess) {
+                val response = uploadResult.getOrNull()
+                Log.d(
+                    TAG,
+                    "HTTP Status=200 elapsedMs=$elapsedMs responseBody=${response?.let { JSONObject().put("session_id", it.session_id).put("received", it.received).put("accepted", it.accepted).put("rejected", it.rejected).put("processed_at", it.processed_at).toString() } ?: "<null>"}",
+                )
+                continue
+            }
 
-        logFailure(failure, "initial")
-        Log.d(TAG, "Upload not retried reason=${retryReason(failure)} elapsedMs=$elapsedMs")
-        requeue(pendingBatch)
+            val failure = uploadResult.exceptionOrNull()
+            if (isRetryable(failure)) {
+                Log.d(TAG, "Upload failed; retrying once reason=${retryReason(failure)} elapsedMs=$elapsedMs", failure)
+                val retryStartedAt = System.currentTimeMillis()
+                val retryResult = teacherRepository.uploadObservation(request)
+                val retryElapsedMs = System.currentTimeMillis() - retryStartedAt
+                if (retryResult.isSuccess) {
+                    val response = retryResult.getOrNull()
+                    Log.d(
+                        TAG,
+                        "HTTP Status=200 elapsedMs=$retryElapsedMs responseBody=${response?.let { JSONObject().put("session_id", it.session_id).put("received", it.received).put("accepted", it.accepted).put("rejected", it.rejected).put("processed_at", it.processed_at).toString() } ?: "<null>"}",
+                    )
+                    continue
+                }
+
+                logFailure(retryResult.exceptionOrNull(), "retry")
+                if (isRetryable(retryResult.exceptionOrNull())) {
+                    requeue(sessionBatch)
+                }
+                continue
+            }
+
+            logFailure(failure, "initial")
+            Log.d(TAG, "Upload not retried reason=${retryReason(failure)} elapsedMs=$elapsedMs")
+        }
     }
 
     suspend fun stop() {
+        Log.d(TAG, "Uploader stop requested workerActive=${batchJob?.isActive == true} queueSize=${pendingCount()}")
         batchJob?.cancel()
         batchJob = null
         flushPendingObservations()
+        Log.d(TAG, "Uploader stop completed workerActive=${batchJob?.isActive == true}")
+    }
+
+    suspend fun clearPendingObservations() {
+        mutex.withLock {
+            queue.clear()
+        }
     }
 
     fun cancel() {
@@ -152,15 +169,18 @@ class ObservationUploader(
         return mutex.withLock { queue.size }
     }
 
+    fun isWorkerActive(): Boolean {
+        return batchJob?.isActive == true
+    }
+
     private suspend fun requeue(batch: List<ParsedObservation>) {
         mutex.withLock {
             batch.asReversed().forEach { queue.addFirst(it) }
         }
     }
 
-    private suspend fun buildUploadRequest(batch: List<ParsedObservation>): BleObservationUploadRequest? {
+    private suspend fun buildUploadRequest(batch: List<ParsedObservation>, sessionId: String): BleObservationUploadRequest? {
         val teacherId = preferencesManager.teacherId.first().trim()
-        val sessionId = preferencesManager.activeSessionId.first().trim()
 
         if (teacherId.isBlank() || sessionId.isBlank()) {
             Log.d(
@@ -174,6 +194,14 @@ class ObservationUploader(
             val studentId = observation.studentId.trim()
             if (studentId.isBlank()) {
                 Log.d(TAG, "Ignored packet: Unknown device anonymousBleId=${observation.anonymousBleDeviceId}")
+                return@mapNotNull null
+            }
+
+            if (!observation.sessionId.isNullOrBlank() && observation.sessionId != sessionId) {
+                Log.w(
+                    TAG,
+                    "Dropped queued observation due to session mismatch queuedSession=${observation.sessionId} activeSession=$sessionId studentId=$studentId",
+                )
                 return@mapNotNull null
             }
 

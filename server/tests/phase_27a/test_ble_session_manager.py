@@ -65,11 +65,18 @@ async def test_load_active_session_context_requires_active_status():
 
 @pytest.mark.asyncio
 async def test_load_session_context_returns_context():
+    from app.attendance.ble import ble_session_manager as module
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(module.settings, "ble_missing_timeout_seconds", 45, raising=False)
     session = make_ble_session()
     repository = SimpleNamespace(get_by_id=AsyncMock(return_value=session))
     manager = BleSessionManager(session_repository=repository)
 
-    context = await manager.load_session_context(session.id)
+    try:
+        context = await manager.load_session_context(session.id)
+    finally:
+        monkeypatch.undo()
 
     assert context.session.id == session.id
     assert context.configuration.missing_timeout_seconds == 45

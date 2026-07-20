@@ -41,7 +41,7 @@ class PresenceEvaluator:
         for observation in observations:
             observations_by_student.setdefault(observation.student_id, []).append(observation)
 
-        student_ids = {device.student_id for device in registered_devices} | set(observations_by_student)
+        student_ids = {device.student_id for device in registered_devices}
 
         presence_states: list[BlePresenceState] = []
         presence_timeout_delta = timedelta(seconds=self.presence_timeout_seconds)
@@ -69,8 +69,12 @@ class PresenceEvaluator:
                     )
                 )
                 logger.info(
-                    "Presence monitor student=%s became MISSING reason=no observations rssi_history=[] last_seen=None cooldown_decision=<handled_in_observation_processor>",
+                    "[BLE][EVALUATE] student=%s last_seen=%s now=%s elapsed=%s status=%s",
                     student_id,
+                    None,
+                    evaluated_at,
+                    None,
+                    BlePresenceDisposition.ABSENT.value,
                 )
                 continue
 
@@ -89,26 +93,20 @@ class PresenceEvaluator:
             if age > presence_timeout_delta:
                 disposition = BlePresenceDisposition.MISSING
                 missing_count += 1
-                logger.info(
-                    "[BLE][STATE] student=%s PRESENT -> MISSING reason=No observations for %s seconds",
-                    student_id,
-                    self.presence_timeout_seconds,
-                )
             elif longest_gap >= partial_threshold_delta:
                 disposition = BlePresenceDisposition.PARTIAL
-                logger.info(
-                    "[BLE][STATE] student=%s MISSING -> PARTIAL reason=Returned after %s+ seconds",
-                    student_id,
-                    self.partial_threshold_seconds,
-                )
             else:
                 disposition = BlePresenceDisposition.PRESENT
                 present_count += 1
-                if longest_gap >= presence_timeout_delta:
-                    logger.info(
-                        "[BLE][STATE] student=%s MISSING -> PRESENT reason=Recovered within recovery window",
-                        student_id,
-                    )
+
+            logger.info(
+                "[BLE][EVALUATE] student=%s last_seen=%s now=%s elapsed=%s status=%s",
+                student_id,
+                last_seen,
+                evaluated_at,
+                int(age.total_seconds()),
+                disposition.value,
+            )
 
             presence_states.append(
                 BlePresenceState(

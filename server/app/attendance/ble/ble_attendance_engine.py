@@ -67,21 +67,6 @@ class BleAttendanceEngine:
         await self.persistence.store_observations(observation_rows)
         self._log_observed_observations(session_context.session.id, observation_rows)
 
-        session_observations = await self.observation_repository.list_by_session(session_context.session.id)
-        registered_devices = await self.registered_device_repository.list_all()
-        evaluation_result = self.presence_evaluator.evaluate(
-            session_start_time=session_context.session.start_time,
-            evaluated_at=payload.observed_at,
-            observations=self._to_validated_observations(session_observations),
-            registered_devices=registered_devices,
-        )
-        drafts = self.attendance_generator.generate(
-            session_context.session.id,
-            session_context.session.start_time,
-            evaluation_result,
-        )
-        await self.persistence.store_attendance(drafts)
-
         return BleObservationUploadResponse(
             session_id=payload.session_id,
             received=len(payload.observations),
@@ -106,21 +91,6 @@ class BleAttendanceEngine:
         await self.persistence.store_observations(observation_rows)
         self._log_observed_observations(session_context.session.id, observation_rows)
 
-        session_observations = await self.observation_repository.list_by_session(session_context.session.id)
-        registered_devices = await self.registered_device_repository.list_all()
-        evaluation_result = self.presence_evaluator.evaluate(
-            session_start_time=session_context.session.start_time,
-            evaluated_at=payload.observed_at,
-            observations=self._to_validated_observations(session_observations),
-            registered_devices=registered_devices,
-        )
-        drafts = self.attendance_generator.generate(
-            session_context.session.id,
-            session_context.session.start_time,
-            evaluation_result,
-        )
-        await self.persistence.store_attendance(drafts)
-
         return BleObservationUploadResponse(
             session_id=payload.session_id,
             received=len(payload.observations),
@@ -134,6 +104,11 @@ class BleAttendanceEngine:
     ) -> BleAttendanceEvaluationResult:
         session_context = await self.session_manager.load_session_context(session_id)
         evaluation_time = ended_at or datetime.now(timezone.utc)
+        previous_attendance = await self.persistence.read_attendance(session_context.session.id)
+        previous_status_by_student = {
+            record.student_id: (record.status.value if hasattr(record.status, "value") else str(record.status))
+            for record in previous_attendance
+        }
         session_observations = await self.observation_repository.list_by_session(session_context.session.id)
         registered_devices = await self.registered_device_repository.list_all()
         evaluation_result = self.presence_evaluator.evaluate(
@@ -142,12 +117,30 @@ class BleAttendanceEngine:
             observations=self._to_validated_observations(session_observations),
             registered_devices=registered_devices,
         )
+        for state in evaluation_result.presence_states:
+            previous_status = previous_status_by_student.get(state.student_id)
+            current_status = state.disposition.value
+            if previous_status is not None and previous_status != current_status:
+                logger.info(
+                    "[BLE][STATE] student=%s %s -> %s reason=%s",
+                    state.student_id,
+                    previous_status,
+                    current_status,
+                    self._state_change_reason(previous_status, current_status),
+                )
         drafts = self.attendance_generator.generate(
             session_context.session.id,
             session_context.session.start_time,
             evaluation_result,
         )
-        await self.persistence.store_attendance(drafts)
+        await self.persistence.store_attendance(drafts, session_id=session_context.session.id)
+        logger.info(
+            "[BLE][SUMMARY] Session=%s Present=%s Missing=%s Partial=%s",
+            session_id,
+            evaluation_result.present_count,
+            evaluation_result.missing_count,
+            sum(1 for state in evaluation_result.presence_states if state.disposition.value == "PARTIAL"),
+        )
         return evaluation_result
 
     async def get_attendance(self, session_id: UUID) -> BleAttendanceResponse:
@@ -217,3 +210,12 @@ class BleAttendanceEngine:
                 observation.last_seen,
                 observation.rssi,
             )
+
+    def _state_change_reason(self, previous_status: str, current_status: str) -> str:
+        if previous_status == "PRESENT" and current_status == "MISSING":
+            return f"No observations for {self.presence_evaluator.presence_timeout_seconds} seconds"
+        if previous_status == "MISSING" and current_status == "PRESENT":
+            return "Recovered within recovery window"
+        if previous_status == "MISSING" and current_status == "PARTIAL":
+            return f"Returned after {self.presence_evaluator.partial_threshold_seconds}+ seconds"
+        return "Attendance state changed"

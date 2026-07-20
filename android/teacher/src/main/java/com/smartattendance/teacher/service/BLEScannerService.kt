@@ -21,7 +21,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.smartattendance.teacher.BuildConfig
 import com.smartattendance.teacher.MainActivity
-import com.smartattendance.teacher.ble.BleLiveMetricsStore
 import com.smartattendance.teacher.ble.ObservationProcessor
 import com.smartattendance.teacher.ble.ObservationUploader
 import com.smartattendance.teacher.ble.RegisteredDeviceFilter
@@ -40,8 +39,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.channels.Channel
 import java.time.Instant
-import java.util.Locale
 
 class BLEScannerService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -59,27 +58,37 @@ class BLEScannerService : Service() {
     private lateinit var teacherRepository: TeacherRepository
     private var registeredDevicesRefreshJob: Job? = null
     private var scanHealthJob: Job? = null
+    private var scanMetricsJob: Job? = null
+    private var scanProcessingJob: Job? = null
     private var startScanJob: Job? = null
+    private var resumeAfterBluetoothReturns = false
+    private var trackedSessionId: String? = null
     private var lastScanResultAtMillis: Long = 0L
-    private var packetsReceivedCount: Long = 0L
-    private var packetsAcceptedCount: Long = 0L
-    private var rssiTotal: Long = 0L
-    private var rssiSamples: Long = 0L
-    private val studentsSeen = mutableSetOf<String>()
+    private var droppedScanEventsCount: Long = 0L
+    private val scanEventChannel = Channel<android.bluetooth.le.ScanResult>(capacity = 128)
 
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
 
-            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+            val nextState = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            Log.i(TAG, "Bluetooth state changed nextState=$nextState shouldRun=$shouldRun scanCallback=${scanCallback != null} workerActive=${observationUploader.isWorkerActive()}")
+
+            when (nextState) {
                 BluetoothAdapter.STATE_ON -> {
-                    if (shouldRun) {
-                        scheduleStartScan()
+                    if (resumeAfterBluetoothReturns) {
+                        resumeAfterBluetoothReturns = false
+                        shouldRun = true
+                        Log.i(TAG, "Bluetooth turned on; restarting scan and uploader shouldRun=$shouldRun uploaderActive=${observationUploader.isWorkerActive()} scanCallback=${scanCallback != null}")
+                        serviceScope.launch {
+                            startScan()
+                        }
                     }
                 }
 
                 BluetoothAdapter.STATE_OFF -> {
-                    stopScan("Bluetooth is off")
+                    resumeAfterBluetoothReturns = shouldRun
+                    stopScan("Bluetooth is off", keepServiceAlive = true)
                 }
             }
         }
@@ -92,6 +101,7 @@ class BLEScannerService : Service() {
         Log.i(TAG, "Service created")
         bluetoothAdapter = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
+        Log.i(TAG, "Scanner created bluetoothAdapter=${bluetoothAdapter != null} bluetoothLeScanner=${bluetoothLeScanner != null}")
         teacherRepository = TeacherRepository(
             context = applicationContext,
             baseUrl = "http://192.168.137.1:8000/",
@@ -115,9 +125,6 @@ class BLEScannerService : Service() {
             }
 
             BleScannerConstants.ACTION_START_SCANNING, null -> {
-                if (!shouldRun) {
-                    BleLiveMetricsStore.reset()
-                }
                 shouldRun = true
                 observationUploader.start()
                 startAsForeground("BLE scanning starting")
@@ -133,9 +140,14 @@ class BLEScannerService : Service() {
             shouldRun = true
         }
 
+        observationUploader.start()
+        Log.d(TAG, "ObservationUploader ensured active before scan start workerActive=${observationUploader.isWorkerActive()}")
+
         Log.d(TAG, "startScan() invoked timestamp=${nowIso()} shouldRun=$shouldRun")
 
         primeUploadContext()
+        val activeSessionId = preferencesManager.activeSessionId.first().trim()
+        ensureSessionState(activeSessionId)
 
         if (!BlePermissions.hasScannerPermissions(this)) {
             Log.w(TAG, "Missing BLE scan permissions; stopping scanner\n${BlePermissions.scannerPermissionReport(this)}")
@@ -147,13 +159,20 @@ class BLEScannerService : Service() {
 
         if (!BlePermissions.isBluetoothEnabled(this)) {
             Log.w(TAG, "Bluetooth disabled; stopping scanner")
-            stopScan("Bluetooth is off")
+            stopScan("Bluetooth is off", keepServiceAlive = true)
             return
         }
 
         Log.d(TAG, "startScan() bluetooth_enabled=true timestamp=${nowIso()}")
 
+        bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner ?: bluetoothLeScanner
+        Log.d(TAG, "Scanner resolved scannerPresent=${bluetoothLeScanner != null} adapterPresent=${bluetoothAdapter != null}")
+
+        drainScanEventChannel()
         refreshRegisteredDevices()
+        ensureScanProcessingJob()
+        scheduleAggregatedMetricsLog()
+        scheduleScanHealthCheck()
 
         val scanner = bluetoothAdapter?.bluetoothLeScanner ?: bluetoothLeScanner
         if (scanner == null) {
@@ -166,7 +185,7 @@ class BLEScannerService : Service() {
         lastScanResultAtMillis = System.currentTimeMillis()
 
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
             .build()
 
         val filters = emptyList<ScanFilter>()
@@ -183,30 +202,25 @@ class BLEScannerService : Service() {
         Log.d(TAG, "Filters used count=${filters.size} values=${describeFilters(filters)}")
 
         scanCallback = object : ScanCallback() {
+            init {
+                Log.d(TAG, "ScanCallback created callbackId=${System.identityHashCode(this)} scannerId=${System.identityHashCode(scanner)}")
+            }
+
             override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult?) {
-                Log.i("BLEScannerService", "onScanResult() callback reached")
-                if (result == null) {
-                    Log.d(TAG, "onScanResult() timestamp=${nowIso()} result=null")
-                    return
-                }
+                if (result == null) return
                 lastScanResultAtMillis = System.currentTimeMillis()
-                packetsReceivedCount += 1
-                val callbackRecord = result.scanRecord
-                val callbackServiceUuids = callbackRecord?.serviceUuids?.joinToString { it.uuid.toString() } ?: "none"
-                val callbackManufacturerData = callbackRecord?.getManufacturerSpecificData(com.smartattendance.shared.ble.BleConstants.MANUFACTURER_ID)
-                val callbackManufacturerLength = callbackManufacturerData?.size ?: -1
-                Log.d(
-                    TAG,
-                    "onScanResult() timestamp=${nowIso()} callbackType=$callbackType(${scanCallbackTypeName(callbackType)}) mac=${result.device?.address ?: "<null>"} deviceHash=${result.device?.hashCode() ?: -1} rssi=${result.rssi} txPower=${result.txPower} serviceUuid=$callbackServiceUuids manufacturerLength=$callbackManufacturerLength",
-                )
-                handleScanResult(result)
+                if (!scanEventChannel.trySend(result).isSuccess) {
+                    droppedScanEventsCount += 1
+                }
             }
 
             override fun onBatchScanResults(results: MutableList<android.bluetooth.le.ScanResult>) {
                 lastScanResultAtMillis = System.currentTimeMillis()
-                packetsReceivedCount += results.size
-                Log.d(TAG, "onBatchScanResults() timestamp=${nowIso()} count=${results.size}")
-                results.forEach { handleScanResult(it) }
+                results.forEach { result ->
+                    if (!scanEventChannel.trySend(result).isSuccess) {
+                        droppedScanEventsCount += 1
+                    }
+                }
             }
 
             override fun onScanFailed(errorCode: Int) {
@@ -252,82 +266,83 @@ class BLEScannerService : Service() {
         }
     }
 
-    private fun handleScanResult(result: android.bluetooth.le.ScanResult) {
-        serviceScope.launch {
-            val record = result.scanRecord
-            val timestampMillis = System.currentTimeMillis()
-            BleLiveMetricsStore.recordPacketReceived(
-                timestampMillis = timestampMillis,
-                macAddress = result.device?.address,
-                rssi = result.rssi,
-            )
-            val advertisementFlags = record?.advertiseFlags
-            val serviceUuids = record?.serviceUuids?.joinToString { it.uuid.toString() } ?: "none"
-            val manufacturerData = record?.getManufacturerSpecificData(com.smartattendance.shared.ble.BleConstants.MANUFACTURER_ID)
-            val serviceData = record?.serviceData?.entries?.joinToString { (uuid, value) -> "${uuid.uuid}:${value.joinToString(separator = "") { byte -> "%02x".format(byte) }}" } ?: "none"
-            val advertisementBytes = record?.bytes?.joinToString(separator = "") { byte -> "%02x".format(byte) } ?: "<none>"
-            val rawLength = record?.bytes?.size ?: -1
-            val scanRecordDebug = record?.toString() ?: "<null>"
-            Log.d(
-                TAG,
-                "Advertisement received timestamp=${nowIso()} mac=${result.device?.address ?: "<null>"} deviceHash=${result.device?.hashCode() ?: -1} rssi=${result.rssi} txPower=${result.txPower} manufacturerId=${com.smartattendance.shared.ble.BleConstants.MANUFACTURER_ID} manufacturerData=${manufacturerData?.joinToString(separator = "") { byte -> "%02x".format(byte) } ?: "<null>"} serviceUuids=$serviceUuids serviceData=$serviceData advertiseFlags=${advertisementFlags ?: -1} rawAdvertisementLength=$rawLength scanRecord=$scanRecordDebug advertisementBytes=$advertisementBytes",
-            )
-            Log.d(
-                TAG,
-                "Raw scan probe mac=${result.device?.address ?: "<null>"} deviceHash=${result.device?.hashCode() ?: -1} rssi=${result.rssi} txPower=${result.txPower} manufacturerData=${manufacturerData?.joinToString(separator = "") { byte -> "%02x".format(byte) } ?: "<null>"} serviceUuids=$serviceUuids serviceData=$serviceData advertiseFlags=${advertisementFlags ?: -1} rawAdvertisementLength=$rawLength scanRecord=$scanRecordDebug advertisementBytes=$advertisementBytes",
-            )
-
-            val parsedAdvertisement = scanParser.parse(result) ?: return@launch
-            Log.d(
-                TAG,
-                "Stage=ScanParser accepted mac=${result.device?.address ?: "<null>"} anonymousId=${parsedAdvertisement.anonymousDeviceIdHex} rollingToken=${parsedAdvertisement.rollingTokenHex}",
-            )
-            val activeSessionId = preferencesManager.activeSessionId.first().trim()
-            val studentId = registeredDeviceFilter.resolveStudentId(
-                anonymousDeviceIdHex = parsedAdvertisement.anonymousDeviceIdHex,
-                rollingTokenHex = parsedAdvertisement.rollingTokenHex,
-                deviceAddress = result.device?.address,
-                rssi = result.rssi,
-                sessionId = activeSessionId.ifBlank { null },
-                serviceUuids = serviceUuids,
-                manufacturerId = com.smartattendance.shared.ble.BleConstants.MANUFACTURER_ID,
-            ) ?: return@launch
-            Log.d(
-                TAG,
-                "Stage=RegisteredDeviceFilter accepted mac=${result.device?.address ?: "<null>"} studentId=$studentId anonymousId=${parsedAdvertisement.anonymousDeviceIdHex} rollingToken=${parsedAdvertisement.rollingTokenHex}",
-            )
-
-            val observation = observationProcessor.prepareObservation(
-                parsedAdvertisement = parsedAdvertisement,
-                timestampMillis = timestampMillis,
-                studentId = studentId,
-                sessionId = activeSessionId.ifBlank { null },
-            ) ?: return@launch
-            Log.d(
-                TAG,
-                "Stage=ObservationProcessor accepted mac=${result.device?.address ?: "<null>"} studentId=$studentId anonymousId=${parsedAdvertisement.anonymousDeviceIdHex} rollingToken=${parsedAdvertisement.rollingTokenHex}",
-            )
-
-            BleLiveMetricsStore.recordPacketAccepted(
-                timestampMillis = timestampMillis,
-                studentId = studentId,
-                macAddress = result.device?.address,
-                rssi = result.rssi,
-            )
-            packetsAcceptedCount += 1
-            studentsSeen.add(studentId)
-            logLiveMetrics("accepted")
-            Log.d(
-                TAG,
-                "Stage=ObservationUploader queued mac=${result.device?.address ?: "<null>"} studentId=$studentId anonymousId=${parsedAdvertisement.anonymousDeviceIdHex} rollingToken=${parsedAdvertisement.rollingTokenHex}",
-            )
-            observationUploader.enqueue(observation)
+    private fun ensureScanProcessingJob() {
+        if (scanProcessingJob?.isActive == true) return
+        scanProcessingJob = serviceScope.launch {
+            for (result in scanEventChannel) {
+                if (!shouldRun) continue
+                handleScanResult(result)
+            }
         }
+    }
+
+    private fun drainScanEventChannel() {
+        while (scanEventChannel.tryReceive().isSuccess) {
+            // Drain stale queued scan results between scan cycles.
+        }
+    }
+
+    private fun scheduleAggregatedMetricsLog() {
+        if (scanMetricsJob?.isActive == true) return
+        scanMetricsJob = serviceScope.launch {
+            while (isActive && shouldRun) {
+                delay(5_000L)
+                if (!shouldRun) break
+                Log.i(
+                    TAG,
+                    "Scan health stage=aggregate dropped=$droppedScanEventsCount queueActive=${scanProcessingJob?.isActive == true} workerActive=${observationUploader.isWorkerActive()} callbackActive=${scanCallback != null}",
+                )
+            }
+        }
+    }
+
+    private suspend fun handleScanResult(result: android.bluetooth.le.ScanResult) {
+        val record = result.scanRecord
+        val timestampMillis = System.currentTimeMillis()
+        val activeSessionId = preferencesManager.activeSessionId.first().trim()
+        if (activeSessionId.isBlank()) {
+            Log.d(TAG, "Skipping scan result because there is no active session")
+            return
+        }
+        ensureSessionState(activeSessionId)
+
+        val serviceUuids = record?.serviceUuids?.joinToString { it.uuid.toString() } ?: "none"
+        val parsedAdvertisement = scanParser.parse(result) ?: return
+        val studentId = registeredDeviceFilter.resolveStudentId(
+            anonymousDeviceIdHex = parsedAdvertisement.anonymousDeviceIdHex,
+            rollingTokenHex = parsedAdvertisement.rollingTokenHex,
+            deviceAddress = result.device?.address,
+            rssi = result.rssi,
+            sessionId = activeSessionId.ifBlank { null },
+            serviceUuids = serviceUuids,
+            manufacturerId = com.smartattendance.shared.ble.BleConstants.MANUFACTURER_ID,
+        ) ?: return
+
+        val observation = observationProcessor.prepareObservation(
+            parsedAdvertisement = parsedAdvertisement,
+            timestampMillis = timestampMillis,
+            studentId = studentId,
+            sessionId = activeSessionId.ifBlank { null },
+        ) ?: return
+
+        observationUploader.enqueue(observation)
+    }
+
+    private suspend fun ensureSessionState(sessionId: String) {
+        if (sessionId.isBlank()) return
+        if (trackedSessionId == sessionId) return
+
+        observationUploader.clearPendingObservations()
+        trackedSessionId = sessionId
+        droppedScanEventsCount = 0L
+        Log.i(TAG, "Reset session-scoped scan state sessionId=$sessionId")
     }
 
     private fun stopCurrentScan() {
         try {
+            Log.i(TAG, "stopCurrentScan() callbackPresent=${scanCallback != null} scannerPresent=${bluetoothLeScanner != null}")
             scanCallback?.let { callback ->
+                Log.i(TAG, "Calling BluetoothLeScanner.stopScan() callbackId=${System.identityHashCode(callback)} scannerId=${System.identityHashCode(bluetoothLeScanner)}")
                 bluetoothLeScanner?.stopScan(callback)
             }
         } catch (exception: Exception) {
@@ -337,25 +352,35 @@ class BLEScannerService : Service() {
         }
     }
 
-    private fun stopScan(reason: String? = null) {
-        Log.i(TAG, "stopScan() timestamp=${nowIso()} reason=${reason ?: "none"} shouldRun=$shouldRun")
+    private fun stopScan(reason: String? = null, keepServiceAlive: Boolean = false) {
+        Log.i(TAG, "stopScan() timestamp=${nowIso()} reason=${reason ?: "none"} shouldRun=$shouldRun keepServiceAlive=$keepServiceAlive")
         shouldRun = false
-        BleLiveMetricsStore.reset()
         stopCurrentScan()
         registeredDevicesRefreshJob?.cancel()
         registeredDevicesRefreshJob = null
         scanHealthJob?.cancel()
         scanHealthJob = null
+        scanMetricsJob?.cancel()
+        scanMetricsJob = null
+        scanProcessingJob?.cancel()
+        scanProcessingJob = null
+        drainScanEventChannel()
         startScanJob?.cancel()
         startScanJob = null
+        if (!keepServiceAlive) {
+            trackedSessionId = null
+        }
         serviceScope.launch {
             observationUploader.stop()
         }
         reason?.let { updateNotification(it) }
         Log.i(TAG, "BLE scanner stopped reason=${reason ?: "none"}")
-        logLiveMetrics("stopped")
-        stopForegroundCompat()
-        stopSelf()
+        if (!keepServiceAlive) {
+            stopForegroundCompat()
+            stopSelf()
+        } else {
+            Log.i(TAG, "Keeping BLE scanner service alive for Bluetooth recovery")
+        }
     }
 
     private fun registerBluetoothReceiver() {
@@ -491,12 +516,14 @@ class BLEScannerService : Service() {
     }
 
     override fun onDestroy() {
-        Log.i(TAG, "Service destroyed")
+        Log.i(TAG, "Service destroyed scanCallback=${scanCallback != null} workerActive=${observationUploader.isWorkerActive()}")
         stopCurrentScan()
         runCatching { unregisterReceiver(bluetoothStateReceiver) }
         runCatching { observationUploader.cancel() }
         registeredDevicesRefreshJob?.cancel()
         scanHealthJob?.cancel()
+        scanMetricsJob?.cancel()
+        scanProcessingJob?.cancel()
         startScanJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
@@ -540,13 +567,4 @@ class BLEScannerService : Service() {
     }
 
     private fun nowIso(): String = Instant.now().toString()
-
-    private fun logLiveMetrics(stage: String) {
-        val liveMetrics = BleLiveMetricsStore.metrics.value
-        val averageRssi = if (rssiSamples == 0L) null else (rssiTotal.toDouble() / rssiSamples.toDouble())
-        Log.d(
-            TAG,
-            "Live metrics stage=$stage packetsReceived=${liveMetrics.packetsReceived} packetsAccepted=${liveMetrics.packetsAccepted} studentsSeen=${liveMetrics.studentsSeenCount} presentCount=${liveMetrics.studentsSeenCount} missingCount=<unknown_until_presence_api> averageRssi=${averageRssi?.let { String.format(Locale.US, "%.2f", it) } ?: "<none>"} lastPacketTime=${if (liveMetrics.lastPacketReceivedAtMillis == 0L) "<none>" else Instant.ofEpochMilli(liveMetrics.lastPacketReceivedAtMillis)} lastAcceptedPacketTime=${if (liveMetrics.lastAcceptedPacketAtMillis == 0L) "<none>" else Instant.ofEpochMilli(liveMetrics.lastAcceptedPacketAtMillis)}",
-        )
-    }
 }

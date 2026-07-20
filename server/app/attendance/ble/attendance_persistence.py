@@ -41,7 +41,30 @@ class AttendancePersistence:
             )
         return persisted
 
-    async def store_attendance(self, drafts: list[BleAttendanceDraft]) -> list[BleAttendance]:
+    async def store_attendance(
+        self,
+        drafts: list[BleAttendanceDraft],
+        session_id: UUID | None = None,
+    ) -> list[BleAttendance]:
+        effective_session_id = session_id or (drafts[0].session_id if drafts else None)
+        if effective_session_id is None:
+            return []
+
+        current_rows = await self.attendance_repository.list_by_session(effective_session_id)
+        desired_student_ids = [draft.student_id for draft in drafts]
+        if current_rows:
+            deleted_count = await self.attendance_repository.delete_by_session_and_student_ids(
+                effective_session_id,
+                desired_student_ids,
+            )
+            if deleted_count > 0:
+                logger.info(
+                    "Deleted stale attendance rows session=%s deleted=%s retained=%s",
+                    effective_session_id,
+                    deleted_count,
+                    len(desired_student_ids),
+                )
+
         persisted: list[BleAttendance] = []
         for draft in drafts:
             attendance = BleAttendance(

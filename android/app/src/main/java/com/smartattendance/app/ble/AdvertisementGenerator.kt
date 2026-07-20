@@ -17,19 +17,6 @@ class AdvertisementGenerator(
         payload.put(normalizeToLength(anonymousDeviceId, BleConstants.ANONYMOUS_DEVICE_ID_BYTES))
         payload.put(rollingToken)
 
-        val anonymousIdHex = toHex(normalizeToLength(anonymousDeviceId, BleConstants.ANONYMOUS_DEVICE_ID_BYTES))
-        val rollingTokenHex = toHex(rollingToken)
-        Log.d(TAG, "Advertising started")
-        Log.d(TAG, "Service UUID=${BleConstants.ADVERTISEMENT_UUID_STRING}")
-        Log.d(TAG, "Manufacturer ID=${BleConstants.MANUFACTURER_ID}")
-        Log.d(TAG, "Anonymous ID=$anonymousIdHex")
-        Log.d(TAG, "Rolling Token=$rollingTokenHex")
-        Log.d(TAG, "Session ID=<not_in_ble_payload>")
-        Log.d(TAG, "Packet Version=<not_in_ble_payload>")
-        Log.d(TAG, "Timestamp=$nowMillis")
-        Log.d(TAG, "Advertising interval=${BleConstants.ADVERTISEMENT_INTERVAL_MS}ms")
-        Log.d(TAG, "Manufacturer Data=${toHex(payload.array())}")
-
         return payload.array()
     }
 

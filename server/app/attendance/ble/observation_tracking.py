@@ -68,30 +68,4 @@ class BleObservationCooldownTracker:
                 self._last_processed_by_session_and_student.pop(key, None)
 
 
-class BlePacketCounter:
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._packets_received_by_session: dict[UUID, int] = {}
-
-    async def record(self, session_id: UUID, packet_count: int) -> int:
-        async with self._lock:
-            self._packets_received_by_session[session_id] = (
-                self._packets_received_by_session.get(session_id, 0) + packet_count
-            )
-            return self._packets_received_by_session[session_id]
-
-    async def get(self, session_id: UUID) -> int:
-        async with self._lock:
-            return self._packets_received_by_session.get(session_id, 0)
-
-    async def reset(self) -> None:
-        async with self._lock:
-            self._packets_received_by_session.clear()
-
-    async def reset_session(self, session_id: UUID) -> None:
-        async with self._lock:
-            self._packets_received_by_session.pop(session_id, None)
-
-
 cooldown_tracker = BleObservationCooldownTracker(cooldown_seconds=120)
-packet_counter = BlePacketCounter()

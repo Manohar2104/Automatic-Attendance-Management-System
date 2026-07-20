@@ -697,12 +697,12 @@
 
         async function syncActiveSessionSelection(showLoading = true) {
             try {
-                const payload = await apiGet('/api/sessions/active');
-                if (!payload || !payload.active || !payload.session || !payload.session.id) {
+                const payload = await apiGet('/api/ble/dashboard');
+                if (!payload || !payload.session || !payload.session.session_id) {
                     return;
                 }
 
-                const activeSessionId = payload.session.id;
+                const activeSessionId = payload.session.session_id;
                 if (selectedSessionId === activeSessionId) {
                     return;
                 }

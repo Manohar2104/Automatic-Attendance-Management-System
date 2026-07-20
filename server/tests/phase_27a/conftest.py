@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
-from app.attendance.ble.observation_tracking import cooldown_tracker, packet_counter
+from app.attendance.ble.observation_tracking import cooldown_tracker
 
 
 @pytest.fixture()
@@ -61,7 +61,5 @@ async def ble_app_client(ble_sessionmaker):
 @pytest.fixture(autouse=True)
 async def reset_ble_observation_trackers():
     await cooldown_tracker.reset()
-    await packet_counter.reset()
     yield
     await cooldown_tracker.reset()
-    await packet_counter.reset()

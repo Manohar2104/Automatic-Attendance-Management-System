@@ -40,6 +40,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.time.Instant
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class BLEAdvertiserService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -48,6 +50,7 @@ class BLEAdvertiserService : Service() {
     private val preferencesManager by lazy { PreferencesManager(applicationContext) }
     private val advertisementGenerator by lazy { AdvertisementGenerator(registrationManager, tokenManager) }
     private val isAdvertising = AtomicBoolean(false)
+    private val advertisingCycleMutex = Mutex()
 
     private val retryDelaysMs = longArrayOf(1_000L, 2_000L, 5_000L, 10_000L)
 
@@ -70,7 +73,7 @@ class BLEAdvertiserService : Service() {
                     if (shouldRun) {
                         serviceScope.launch {
                             delay(1_000L)
-                            refreshAdvertisingCycle()
+                            requestAdvertisingCycleRefresh()
                         }
                     }
                 }
@@ -102,10 +105,11 @@ class BLEAdvertiserService : Service() {
 
             BleConstants.ACTION_START_ADVERTISING, null -> {
                 currentSessionId = intent?.getStringExtra(BleConstants.EXTRA_SESSION_ID)
+                    ?: runBlockingCurrentSessionId()
                 shouldRun = true
                 retryAttemptIndex = 0
                 startAsForeground()
-                serviceScope.launch { refreshAdvertisingCycle() }
+                requestAdvertisingCycleRefresh()
             }
         }
 
@@ -126,55 +130,62 @@ class BLEAdvertiserService : Service() {
     }
 
     private suspend fun refreshAdvertisingCycle() {
-        if (!shouldRun) return
+        advertisingCycleMutex.withLock {
+            if (!shouldRun) return
 
-        refreshBluetoothState()
+            refreshBluetoothState()
 
-        if (!isCurrentSessionActive()) {
-            Log.i(TAG, "No active BLE session; advertising stays idle")
-            stopCurrentAdvertising("No active BLE session")
-            updateNotification("Waiting for active session")
-            serviceScope.launch {
-                delay(30_000L)
-                if (shouldRun) {
-                    refreshAdvertisingCycle()
+            if (!isCurrentSessionActive()) {
+                Log.i(TAG, "No active BLE session; advertising stays idle")
+                stopCurrentAdvertising("No active BLE session")
+                updateNotification("Waiting for active session")
+                serviceScope.launch {
+                    delay(30_000L)
+                    if (shouldRun) {
+                        requestAdvertisingCycleRefresh()
+                    }
                 }
+                return
             }
-            return
+
+            val payload = advertisementGenerator.generatePayload()
+            runBleDiagnostics(payload)
+
+            if (!validateAdvertiserPermissions()) {
+                stopAdvertisingSession()
+                return
+            }
+
+            if (!BlePermissions.isBluetoothEnabled(this)) {
+                Log.w(TAG, "Reason: Bluetooth OFF")
+                stopCurrentAdvertising("Bluetooth OFF")
+                updateNotification("Bluetooth disabled")
+                return
+            }
+
+            if (!ensureBleRegistration()) {
+                updateNotification("BLE device registration failed")
+                stopAdvertisingSession()
+                return
+            }
+
+            if (payload == null) {
+                Log.w(TAG, "Reason: Advertiser payload could not be generated")
+                stopAdvertisingSession()
+                return
+            }
+
+            startAdvertising(payload)
         }
+    }
 
-        val payload = advertisementGenerator.generatePayload()
-        runBleDiagnostics(payload)
-
-        if (!validateAdvertiserPermissions()) {
-            stopAdvertisingSession()
-            return
+    private fun requestAdvertisingCycleRefresh(delayMs: Long = 0L) {
+        serviceScope.launch {
+            if (delayMs > 0L) {
+                delay(delayMs)
+            }
+            refreshAdvertisingCycle()
         }
-
-        if (!BlePermissions.isBluetoothEnabled(this)) {
-            Log.w(TAG, "Reason: Bluetooth OFF")
-            stopCurrentAdvertising("Bluetooth OFF")
-            updateNotification("Bluetooth disabled")
-            return
-        }
-
-        if (!ensureBleRegistration()) {
-            updateNotification("BLE device registration failed")
-            stopAdvertisingSession()
-            return
-        }
-
-        if (payload == null) {
-            Log.w(TAG, "Reason: Advertiser payload could not be generated")
-            stopAdvertisingSession()
-            return
-        }
-
-        Log.d(TAG, "Payload length=${payload.size} bytes")
-        Log.d(TAG, "Payload hex=${toHex(payload)}")
-        Log.d(TAG, "Advertisement prepared timestamp=${Instant.now()} sessionId=${currentSessionId ?: "<null>"} manufacturerId=${BleConstants.MANUFACTURER_ID} serviceUuid=${BleConstants.ADVERTISEMENT_UUID_STRING} interval=${BleConstants.ADVERTISEMENT_INTERVAL_MS}ms")
-
-        startAdvertising(payload)
     }
 
     private suspend fun ensureBleRegistration(): Boolean {
@@ -207,8 +218,8 @@ class BLEAdvertiserService : Service() {
 
         stopCurrentAdvertising("Restart advertising with fresh payload")
 
-        val advertisingMode = AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
-        val txPowerLevel = AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
+        val advertisingMode = AdvertiseSettings.ADVERTISE_MODE_BALANCED
+        val txPowerLevel = AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(advertisingMode)
@@ -234,11 +245,8 @@ class BLEAdvertiserService : Service() {
                 isAdvertising.set(true)
                 retryAttemptIndex = 0
                 updateNotification("Advertising attendance packets...")
-                Log.i(TAG, "Advertisement Sent timestamp=${Instant.now()} sessionId=${currentSessionId ?: "<null>"}")
-                Log.i(
-                    TAG,
-                    "onStartSuccess() payloadLength=${payload.size} anonymousId=${payload.copyOfRange(0, BleConstants.ANONYMOUS_DEVICE_ID_BYTES).let { toHex(it) }} rollingToken=${payload.copyOfRange(BleConstants.ANONYMOUS_DEVICE_ID_BYTES, payload.size).let { toHex(it) }} sessionId=${currentSessionId ?: "<null>"} manufacturerData=${toHex(payload)} advertisingMode=$advertisingMode advertisingPower=$txPowerLevel advertisingIntervalMs=${BleConstants.ADVERTISEMENT_INTERVAL_MS}",
-                )
+                scheduleTokenRefresh()
+                Log.i(TAG, "BLE Advertiser Started Mode = BALANCED TX Power = MEDIUM Interval ≈ ${BleConstants.ADVERTISEMENT_INTERVAL_MS} ms")
             }
 
             override fun onStartFailure(errorCode: Int) {
@@ -462,6 +470,9 @@ class BLEAdvertiserService : Service() {
             }
             advertiseCallback = null
             isAdvertising.set(false)
+            bluetoothLeAdvertiser = null
+            advertisingLoop?.cancel()
+            advertisingLoop = null
         }
     }
 
@@ -562,6 +573,7 @@ class BLEAdvertiserService : Service() {
         advertisingLoop?.cancel()
         retryJob?.cancel()
         unregisterReceiverSafely()
+        bluetoothLeAdvertiser = null
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -571,6 +583,12 @@ class BLEAdvertiserService : Service() {
             unregisterReceiver(bluetoothStateReceiver)
         } catch (_: IllegalArgumentException) {
             // Receiver may already be unregistered during teardown.
+        }
+    }
+
+    private fun runBlockingCurrentSessionId(): String? {
+        return kotlinx.coroutines.runBlocking {
+            preferencesManager.sessionId.first().trim().takeIf { it.isNotBlank() }
         }
     }
 

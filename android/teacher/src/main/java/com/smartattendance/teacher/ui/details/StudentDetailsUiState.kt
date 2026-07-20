@@ -16,25 +16,25 @@ data class StudentDetailsUiState(
 
     val studentId: String = "",
 
-    val studentName: String = "Alice Johnson",
+    val studentName: String = "",
 
-    val usn: String = "PES2UG22CS001",
+    val usn: String = "",
 
-    val attendanceStatus: AttendanceStatus = AttendanceStatus.PRESENT,
+    val attendanceStatus: AttendanceStatus = AttendanceStatus.ABSENT,
 
-    val confidence: Int = 98,
+    val confidence: Int = 0,
 
-    val averageRssi: Int = -56,
+    val averageRssi: Int = 0,
 
-    val packetsReceived: Int = 145,
+    val packetsReceived: Int = 0,
 
-    val firstSeen: String = "09:01:14",
+    val firstSeen: String = "--",
 
-    val lastSeen: String = "09:47:52",
+    val lastSeen: String = "--",
 
-    val rollingToken: String = "**************",
+    val rollingToken: String = "--",
 
-    val deviceId: String = "ANDROID-AB12CD34",
+    val deviceId: String = "--",
 
     val manualOverride: Boolean = false,
 

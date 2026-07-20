@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..attendance.ble import BleAttendanceEngine
-from ..attendance.ble.observation_tracking import cooldown_tracker, packet_counter
+from ..attendance.ble.observation_tracking import cooldown_tracker
 from ..attendance.ble.contracts import BlePresenceDisposition
 from ..ble_schemas import (
     BleDashboardResponse,
@@ -85,6 +85,55 @@ class BleService:
             return token
         return f"{token[:16]}..."
 
+    def _session_window_start(self, session: BleSession, legacy_session: LegacySession | None = None) -> datetime:
+        legacy_start = None
+        if legacy_session is not None:
+            legacy_start = legacy_session.actual_start or legacy_session.scheduled_start
+        session_start = session.start_time
+
+        if legacy_start is None:
+            return self._to_utc_datetime(session_start) or session_start
+
+        normalized_legacy_start = self._to_utc_datetime(legacy_start) or legacy_start
+        normalized_session_start = self._to_utc_datetime(session_start) or session_start
+        return max(normalized_legacy_start, normalized_session_start)
+
+    def _filter_session_window_observations(
+        self,
+        observations,
+        session_start: datetime,
+        registered_student_ids: set[UUID],
+    ):
+        return [
+            observation
+            for observation in observations
+            if observation.student_id in registered_student_ids
+            and self._to_utc_datetime(observation.timestamp) >= session_start
+        ]
+
+    def _filter_session_window_attendance(
+        self,
+        attendance,
+        session_start: datetime,
+        registered_student_ids: set[UUID],
+    ):
+        return [
+            record
+            for record in attendance
+            if record.student_id in registered_student_ids
+            and self._to_utc_datetime(record.last_seen) >= session_start
+        ]
+
+    async def _current_registered_student_ids(self) -> set[UUID]:
+        registered_devices = await self.registered_device_repository.list_all()
+        return {device.student_id for device in registered_devices}
+
+    def _filter_registered_observations(self, observations, registered_student_ids: set[UUID]):
+        return [observation for observation in observations if observation.student_id in registered_student_ids]
+
+    def _filter_registered_attendance(self, attendance, registered_student_ids: set[UUID]):
+        return [record for record in attendance if record.student_id in registered_student_ids]
+
     async def start_session(
         self, payload: BleSessionStartRequest, current_user
     ) -> BleSessionResponse:
@@ -117,10 +166,10 @@ class BleService:
                 status=BleSessionStatus.ACTIVE,
                 start_time=payload.start_time,
                 end_time=payload.start_time + timedelta(hours=1),
+                packets_received=0,
             )
             self.db.add(legacy_session)
             session = await self.session_repository.create(session)
-            await packet_counter.reset_session(session.id)
             await cooldown_tracker.reset_session(session.id)
             logger.info(
                 "BLE session created status=%s teacher_id=%s session_id=%s",
@@ -160,7 +209,6 @@ class BleService:
                 BleSessionStatus.ENDED,
                 end_time=payload.ended_at,
             )
-            await packet_counter.reset_session(payload.session_id)
             await cooldown_tracker.reset_session(payload.session_id)
             await self._log_session_summary(session, evaluation_result, payload.ended_at, current_user.email)
             await self.db.commit()
@@ -216,8 +264,6 @@ class BleService:
                 item.timestamp,
             )
 
-        await packet_counter.record(payload.session_id, len(payload.observations))
-
         session = await self.session_repository.get_by_id(payload.session_id)
         if not session:
             logger.info("BLE upload rejected: session not found session_id=%s", payload.session_id)
@@ -235,6 +281,8 @@ class BleService:
                 status_code=409,
                 detail="Session is not accepting observation uploads",
             )
+
+        session.packets_received = (session.packets_received or 0) + len(payload.observations)
 
         try:
             logger.info(
@@ -270,11 +318,37 @@ class BleService:
 
         logger.info("BLE dashboard endpoint called by user=%s", current_user.id)
 
-        legacy_result = await self.db.execute(
-            select(LegacySession)
-            .where(LegacySession.status == LegacySessionStatus.ACTIVE)
-            .order_by(LegacySession.scheduled_start.desc())
-        )
+        if current_user.role == RoleEnum.ADMIN:
+            legacy_query = (
+                select(LegacySession)
+                .where(LegacySession.status == LegacySessionStatus.ACTIVE)
+                .order_by(LegacySession.scheduled_start.desc())
+            )
+            ble_query = (
+                select(BleSession)
+                .where(BleSession.status == BleSessionStatus.ACTIVE)
+                .order_by(BleSession.start_time.desc())
+            )
+        else:
+            legacy_query = (
+                select(LegacySession)
+                .join(BleSession, BleSession.id == LegacySession.id)
+                .where(
+                    LegacySession.status == LegacySessionStatus.ACTIVE,
+                    BleSession.teacher_id == current_user.id,
+                )
+                .order_by(LegacySession.scheduled_start.desc())
+            )
+            ble_query = (
+                select(BleSession)
+                .where(
+                    BleSession.status == BleSessionStatus.ACTIVE,
+                    BleSession.teacher_id == current_user.id,
+                )
+                .order_by(BleSession.start_time.desc())
+            )
+
+        legacy_result = await self.db.execute(legacy_query)
         active_legacy_session = legacy_result.scalars().first()
 
         ble_session = None
@@ -284,11 +358,7 @@ class BleService:
             )
             ble_session = ble_result.scalars().first()
         if ble_session is None:
-            ble_result = await self.db.execute(
-                select(BleSession)
-                .where(BleSession.status == BleSessionStatus.ACTIVE)
-                .order_by(BleSession.start_time.desc())
-            )
+            ble_result = await self.db.execute(ble_query)
             ble_session = ble_result.scalars().first()
 
         logger.info(
@@ -320,9 +390,15 @@ class BleService:
             )
 
         registered_devices = await self.registered_device_repository.list_all()
-        observations = await self.observation_repository.list_by_session(session.id)
+        registered_student_ids = {device.student_id for device in registered_devices}
+        session_start = self._session_window_start(session, active_legacy_session)
+        observations = self._filter_session_window_observations(
+            await self.observation_repository.list_by_session(session.id),
+            session_start,
+            registered_student_ids,
+        )
         detected_students = {observation.student_id for observation in observations}
-        packets_received = max(await packet_counter.get(session.id), len(observations))
+        packets_received = len(observations)
         logger.info(
             "BLE dashboard active session selected session=%s registered_devices=%s students_seen=%s packets_received=%s",
             session.id,
@@ -441,8 +517,22 @@ class BleService:
             raise HTTPException(status_code=404, detail="Session not found")
 
         self._require_session_access(session, current_user)
-        await self.attendance_engine.finalize_session(session_id)
-        return await self.attendance_engine.get_attendance(session_id)
+        response = await self.attendance_engine.get_attendance(session_id)
+        registered_student_ids = await self._current_registered_student_ids()
+        filtered_records = [
+            record
+            for record in response.records
+            if record.student_id in registered_student_ids
+        ]
+        return BleAttendanceResponse(
+            session_id=response.session_id,
+            attendance_mode=response.attendance_mode,
+            summary=BleAttendanceSummary(
+                present=sum(1 for record in filtered_records if record.status == "PRESENT"),
+                missing=sum(1 for record in filtered_records if record.status == "MISSING"),
+            ),
+            records=filtered_records,
+        )
 
     async def list_sessions(self, current_user) -> BleSessionsListResponse:
         self._require_teacher_access(current_user)
@@ -478,11 +568,23 @@ class BleService:
             raise HTTPException(status_code=404, detail="Session not found")
 
         self._require_session_access(session, current_user)
-        evaluation_result = await self.attendance_engine.finalize_session(session_id)
+
+        legacy_result = await self.db.execute(select(LegacySession).where(LegacySession.id == session.id))
+        legacy_session = legacy_result.scalars().first()
 
         registered_devices = await self.registered_device_repository.list_all()
-        observations = await self.observation_repository.list_by_session(session_id)
-        attendance = await self.attendance_repository.list_by_session(session_id)
+        registered_student_ids = {device.student_id for device in registered_devices}
+        session_start = self._session_window_start(session, legacy_session)
+        observations = self._filter_session_window_observations(
+            await self.observation_repository.list_by_session(session_id),
+            session_start,
+            registered_student_ids,
+        )
+        attendance = self._filter_session_window_attendance(
+            await self.attendance_repository.list_by_session(session_id),
+            session_start,
+            registered_student_ids,
+        )
 
         detected_students = {observation.student_id for observation in observations}
         latest_observation = max(
@@ -508,17 +610,15 @@ class BleService:
             if (record.status.value if hasattr(record.status, "value") else str(record.status))
             == "MISSING"
         )
-
-        legacy_result = await self.db.execute(select(LegacySession).where(LegacySession.id == session.id))
-        legacy_session = legacy_result.scalars().first()
+        packets_received = len(observations)
 
         return BleSessionSummaryResponse(
             session=self._to_session_response(session, legacy_session=legacy_session),
             registered_students=len(registered_devices),
             detected_students=len(detected_students),
-            packets_received=len(observations),
-            present=evaluation_result.present_count,
-            missing=evaluation_result.missing_count,
+            packets_received=packets_received,
+            present=present,
+            missing=missing,
             absent=None,
             late=None,
             latest_observation=self._to_utc_datetime(latest_observation),
@@ -535,11 +635,21 @@ class BleService:
         if session is None:
             return
 
-        observations = await self.observation_repository.list_by_session(session.id)
-        attendance = await self.attendance_repository.list_by_session(session.id)
         registered_devices = await self.registered_device_repository.list_all()
+        session_start = self._session_window_start(session)
+        registered_student_ids = {device.student_id for device in registered_devices}
+        observations = self._filter_session_window_observations(
+            await self.observation_repository.list_by_session(session.id),
+            session_start,
+            registered_student_ids,
+        )
+        attendance = self._filter_session_window_attendance(
+            await self.attendance_repository.list_by_session(session.id),
+            session_start,
+            registered_student_ids,
+        )
         detected_students = {observation.student_id for observation in observations}
-        packets_received = await packet_counter.get(session.id)
+        packets_received = len(observations)
         presence_states = getattr(evaluation_result, "presence_states", []) or []
         partial_count = sum(
             1 for state in presence_states if state.disposition == BlePresenceDisposition.PARTIAL
@@ -591,7 +701,15 @@ class BleService:
 
         self._require_session_access(session, current_user)
 
-        observations = await self.observation_repository.list_by_session(session_id)
+        legacy_session = await self._lookup_legacy_session(session.id)
+
+        registered_student_ids = await self._current_registered_student_ids()
+        session_start = self._session_window_start(session, legacy_session)
+        observations = self._filter_session_window_observations(
+            await self.observation_repository.list_by_session(session_id),
+            session_start,
+            registered_student_ids,
+        )
         if not observations:
             logger.info(
                 "Dashboard observations metrics session_id=%s observation_count=0 students_seen=0 packets_received=0 average_rssi=None latest_observation=None",
@@ -614,6 +732,7 @@ class BleService:
         registered_devices = await self.registered_device_repository.list_all()
         anonymous_id_by_student = {
             device.student_id: device.anonymous_ble_id for device in registered_devices
+            if device.student_id in student_ids
         }
 
         items = [
@@ -660,9 +779,16 @@ class BleService:
             raise HTTPException(status_code=404, detail="Session not found")
 
         self._require_session_access(session, current_user)
-        await self.attendance_engine.finalize_session(session_id)
 
-        records = await self.attendance_repository.list_by_session(session_id)
+        legacy_session = await self._lookup_legacy_session(session.id)
+
+        registered_student_ids = await self._current_registered_student_ids()
+        session_start = self._session_window_start(session, legacy_session)
+        records = self._filter_session_window_attendance(
+            await self.attendance_repository.list_by_session(session_id),
+            session_start,
+            registered_student_ids,
+        )
         student_ids = [record.student_id for record in records]
         student_name_map = await self._get_student_name_map(student_ids)
 

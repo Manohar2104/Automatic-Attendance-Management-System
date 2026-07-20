@@ -6,7 +6,6 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.smartattendance.teacher.ble.BleLiveMetricsStore
 import com.smartattendance.shared.ble.BleScannerConstants
 import com.smartattendance.teacher.repository.TeacherRepository
 import com.smartattendance.teacher.service.BLEScannerService
@@ -15,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 
 class DashboardViewModel(
@@ -33,7 +33,6 @@ class DashboardViewModel(
     init {
         loadDashboard()
         startAutoRefresh()
-        observeLiveMetrics()
     }
 
     fun loadDashboard() {
@@ -50,26 +49,20 @@ class DashboardViewModel(
 
         repository.getDashboardState()
             .onSuccess { dashboard ->
-                val currentState = _uiState.value
                 val noActiveSession = dashboard.activeSessionId.isBlank() && dashboard.sessionStatus == "NO SESSION"
-                val shouldKeepScannerState = !noActiveSession
-                val nextScannerStatus = if (shouldKeepScannerState) currentState.scannerStatus else "STOPPED"
-                val nextSessionId = if (noActiveSession) "" else currentState.activeSessionId.ifBlank { dashboard.activeSessionId }
-                val liveMetrics = BleLiveMetricsStore.metrics.value
+                val nextScannerStatus = if (noActiveSession) "STOPPED" else _uiState.value.scannerStatus
 
                 _uiState.value = dashboard.copy(
                     isLoading = false,
-                    packetsReceived = maxOf(dashboard.packetsReceived, liveMetrics.packetsReceived.toInt()),
-                    studentsSeen = maxOf(dashboard.studentsSeen, liveMetrics.studentsSeenCount),
                     scannerStatus = nextScannerStatus,
-                    activeSessionId = nextSessionId,
+                    activeSessionId = if (noActiveSession) "" else dashboard.activeSessionId,
                 )
                 Log.d(
                     TAG,
                     "Teacher metrics update sessionId=${_uiState.value.activeSessionId.ifBlank { "<none>" }} packetsReceived=${_uiState.value.packetsReceived} studentsSeen=${_uiState.value.studentsSeen} registered=${_uiState.value.registeredDevices} scannerStatus=${_uiState.value.scannerStatus}",
                 )
 
-                if (noActiveSession && currentState.scannerStatus == "RUNNING") {
+                if (noActiveSession && _uiState.value.scannerStatus == "RUNNING") {
                     stopScanning()
                 }
             }
@@ -85,19 +78,8 @@ class DashboardViewModel(
     private fun startAutoRefresh() {
         viewModelScope.launch {
             while (isActive) {
-                delay(5_000L)
+                delay(10_000L)
                 refreshDashboardOnce()
-            }
-        }
-    }
-
-    private fun observeLiveMetrics() {
-        viewModelScope.launch {
-            BleLiveMetricsStore.metrics.collect { liveMetrics ->
-                _uiState.value = _uiState.value.copy(
-                    packetsReceived = maxOf(_uiState.value.packetsReceived, liveMetrics.packetsReceived.toInt()),
-                    studentsSeen = maxOf(_uiState.value.studentsSeen, liveMetrics.studentsSeenCount),
-                )
             }
         }
     }
@@ -109,15 +91,13 @@ class DashboardViewModel(
                 return@launch
             }
 
-            if (_uiState.value.activeSessionId.isBlank()) {
-                repository.getDashboardState()
-                    .onSuccess { dashboard ->
-                        _uiState.value = _uiState.value.copy(
-                            activeSessionId = dashboard.activeSessionId,
-                            teacherId = dashboard.teacherId,
-                        )
-                    }
-            }
+            repository.getDashboardState()
+                .onSuccess { dashboard ->
+                    _uiState.value = _uiState.value.copy(
+                        activeSessionId = dashboard.activeSessionId.ifBlank { _uiState.value.activeSessionId },
+                        teacherId = dashboard.teacherId.ifBlank { _uiState.value.teacherId },
+                    )
+                }
 
             if (_uiState.value.activeSessionId.isBlank()) {
                 _uiState.value = _uiState.value.copy(

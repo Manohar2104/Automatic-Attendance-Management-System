@@ -126,11 +126,13 @@ async def test_ble_presence_refreshes_without_new_packets(ble_db_session, ble_ap
 
     summary_response = await ble_app_client.get(f"/api/ble/session/{session.id}/summary", headers={"Authorization": f"Bearer {token}"})
     assert summary_response.status_code == 200
-    assert summary_response.json()["missing"] == 1
+    assert summary_response.json()["present"] == 0
+    assert summary_response.json()["missing"] == 0
 
     presence_response = await ble_app_client.get(f"/api/ble/session/{session.id}/presence", headers={"Authorization": f"Bearer {token}"})
     assert presence_response.status_code == 200
-    assert presence_response.json()["summary"]["missing"] == 1
+    assert presence_response.json()["summary"]["present"] == 0
+    assert presence_response.json()["summary"]["missing"] == 0
 
 
 @pytest.mark.asyncio
@@ -239,6 +241,92 @@ async def test_ble_api_handles_bad_request_and_invalid_session(ble_db_session, b
 
 
 @pytest.mark.asyncio
+async def test_active_session_is_global_ble_source_of_truth(ble_db_session, ble_app_client):
+    teacher_a, token_a = await seed_user_and_token(
+        ble_db_session,
+        ble_app_client,
+        "teacher-a@test.com",
+        RoleEnum.FACULTY,
+    )
+    teacher_b, _ = await seed_user_and_token(
+        ble_db_session,
+        ble_app_client,
+        "teacher-b@test.com",
+        RoleEnum.FACULTY,
+    )
+    student, student_token = await seed_user_and_token(
+        ble_db_session,
+        ble_app_client,
+        "student-a@test.com",
+        RoleEnum.STUDENT,
+    )
+
+    session_a_start = datetime.now(timezone.utc).replace(microsecond=0)
+    session_b_start = session_a_start + timedelta(minutes=1)
+    session_a_end = session_a_start + timedelta(hours=1)
+    session_b_end = session_b_start + timedelta(hours=1)
+
+    session_a = make_ble_session(teacher_id=teacher_a.id, start_time=session_a_start, end_time=session_a_end)
+    session_b = make_ble_session(
+        teacher_id=teacher_b.id,
+        start_time=session_b_start,
+        end_time=session_b_end,
+        status=BleSessionStatus.ENDED,
+    )
+    legacy_session_a = Session(
+        id=session_a.id,
+        course_id=session_a.course_id,
+        room_id="Room101",
+        location="Room101",
+        scheduled_start=session_a.start_time,
+        scheduled_end=session_a_end,
+        actual_start=session_a.start_time,
+        actual_end=None,
+        status=SessionStatus.ACTIVE,
+    )
+    legacy_session_b = Session(
+        id=session_b.id,
+        course_id=session_b.course_id,
+        room_id="Room101",
+        location="Room101",
+        scheduled_start=session_b.start_time,
+        scheduled_end=session_b_end,
+        actual_start=session_b.start_time,
+        actual_end=session_b_end,
+        status=SessionStatus.COMPLETED,
+    )
+    ble_db_session.add_all([session_a, session_b, legacy_session_a, legacy_session_b])
+    await ble_db_session.commit()
+
+    active_response_for_teacher = await ble_app_client.get(
+        "/api/sessions/active",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert active_response_for_teacher.status_code == 200
+    active_body_for_teacher = active_response_for_teacher.json()
+    assert active_body_for_teacher["active"] is True
+    assert active_body_for_teacher["session"]["id"] == str(session_a.id)
+
+    active_response_for_student = await ble_app_client.get(
+        "/api/sessions/active",
+        headers={"Authorization": f"Bearer {student_token}"},
+    )
+    assert active_response_for_student.status_code == 200
+    active_body_for_student = active_response_for_student.json()
+    assert active_body_for_student["active"] is True
+    assert active_body_for_student["session"]["id"] == str(session_a.id)
+
+    dashboard_response = await ble_app_client.get(
+        "/api/ble/dashboard",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert dashboard_response.status_code == 200
+    dashboard_body = dashboard_response.json()
+    assert dashboard_body["session"]["session_id"] == str(session_a.id)
+    assert student.email == "student-a@test.com"
+
+
+@pytest.mark.asyncio
 async def test_ble_device_registration_upserts_student_device(ble_db_session, ble_app_client):
     student, token = await seed_user_and_token(ble_db_session, ble_app_client, "student-register@test.com", RoleEnum.STUDENT)
 
@@ -320,8 +408,14 @@ async def test_ble_dashboard_reports_active_session_metrics(ble_db_session, ble_
         end_time=ble_end,
     )
     device = make_registered_device(student_id=student.id)
-    observation = make_ble_observation(session_id=session.id, student_id=student.id)
+    observation = make_ble_observation(
+        session_id=session.id,
+        student_id=student.id,
+        last_seen=legacy_start + timedelta(minutes=1),
+        timestamp=legacy_start + timedelta(minutes=1),
+    )
     ble_db_session.add_all([session, ble_session, device, observation])
+    ble_session.packets_received = 1
     await ble_db_session.commit()
 
     response = await ble_app_client.get(
@@ -338,6 +432,82 @@ async def test_ble_dashboard_reports_active_session_metrics(ble_db_session, ble_
     assert data["registered_devices"] == 1
     assert data["students_seen"] == 1
     assert data["packets_received"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ble_dashboard_ignores_observations_before_effective_session_start(ble_db_session, ble_app_client):
+    teacher, token = await seed_user_and_token(ble_db_session, ble_app_client, "teacher-reset@test.com", RoleEnum.FACULTY)
+    student_a, _ = await seed_user_and_token(ble_db_session, ble_app_client, "student-reset-a@test.com", RoleEnum.STUDENT)
+    student_b, _ = await seed_user_and_token(ble_db_session, ble_app_client, "student-reset-b@test.com", RoleEnum.STUDENT)
+
+    from tests.phase_27a.factories import make_registered_device, make_ble_observation, make_ble_session
+
+    legacy_start = datetime.now(timezone.utc).replace(microsecond=0)
+    legacy_end = legacy_start + timedelta(hours=1)
+    ble_start = legacy_start - timedelta(days=1)
+    ble_end = ble_start + timedelta(hours=2)
+
+    session = Session(
+        id=uuid4(),
+        course_id="CS101",
+        room_id="sim-room-101",
+        location="sim-room-101",
+        scheduled_start=legacy_start,
+        scheduled_end=legacy_end,
+        actual_start=legacy_start,
+        actual_end=None,
+        status=SessionStatus.ACTIVE,
+    )
+    ble_session = BleSession(
+        id=session.id,
+        course_id=session.course_id,
+        teacher_id=teacher.id,
+        attendance_mode=BleAttendanceMode.BLE,
+        status=BleSessionStatus.ACTIVE,
+        start_time=ble_start,
+        end_time=ble_end,
+    )
+    device_a = make_registered_device(
+        student_id=student_a.id,
+        anonymous_ble_id="aa11bb22cc33dd44ee55ff6677889901",
+        public_identifier=student_a.email,
+        device_hash="device-hash-reset-a",
+    )
+    device_b = make_registered_device(
+        student_id=student_b.id,
+        anonymous_ble_id="aa11bb22cc33dd44ee55ff6677889902",
+        public_identifier=student_b.email,
+        device_hash="device-hash-reset-b",
+    )
+    stale_observation = make_ble_observation(
+        session_id=session.id,
+        student_id=student_b.id,
+        last_seen=legacy_start - timedelta(minutes=5),
+        timestamp=legacy_start - timedelta(minutes=5),
+    )
+    fresh_observation = make_ble_observation(
+        session_id=session.id,
+        student_id=student_a.id,
+        last_seen=legacy_start + timedelta(minutes=1),
+        timestamp=legacy_start + timedelta(minutes=1),
+    )
+    ble_db_session.add_all([session, ble_session, device_a, device_b, stale_observation, fresh_observation])
+    await ble_db_session.commit()
+
+    dashboard_response = await ble_app_client.get("/api/ble/dashboard", headers={"Authorization": f"Bearer {token}"})
+    assert dashboard_response.status_code == 200
+    dashboard = dashboard_response.json()
+    assert dashboard["students_seen"] == 1
+    assert dashboard["packets_received"] == 1
+
+    observations_response = await ble_app_client.get(
+        f"/api/ble/session/{session.id}/observations",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert observations_response.status_code == 200
+    observations = observations_response.json()["observations"]
+    assert len(observations) == 1
+    assert observations[0]["student_id"] == str(student_a.id)
 
 
 @pytest.mark.asyncio
@@ -386,7 +556,7 @@ async def test_ble_dashboard_counts_all_received_packets_with_cooldown(ble_db_se
     assert dashboard_response.status_code == 200
     data = dashboard_response.json()
     assert data["students_seen"] == 1
-    assert data["packets_received"] == 2
+    assert data["packets_received"] == 1
 
 
 @pytest.mark.asyncio

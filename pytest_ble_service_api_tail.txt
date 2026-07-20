@@ -1,0 +1,80 @@
+﻿        assert data["session"]["end_time"] == f"{legacy_end.isoformat()}Z"
+        assert data["session"]["room"] == "sim-room-101"
+        assert data["registered_devices"] == 1
+>       assert data["students_seen"] == 1
+E       assert 0 == 1
+
+server\tests\phase_27a\test_ble_service_and_api.py:428: AssertionError
+---------------------------- Captured stdout call -----------------------------
+========== LOGIN DEBUG ==========
+EMAIL RECEIVED: teacher-dashboard@test.com
+USER FOUND: True
+DB EMAIL: teacher-dashboard@test.com
+HASH: $2b$12$nSJcHgIjEy0Nlit3BuZaT.eT/SI2dj.yZFa4ZdhOG.aqBB/c1vZja
+PASSWORD MATCH: True
+================================
+{"timestamp": "2026-07-20T14:58:29.106629+00:00", "level": "INFO", "logger": "app.main", "message": "User logged in successfully: teacher-dashboard@test.com", "request_id": "8eeb3558-4e83-468c-b089-d26522942669", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/login"}
+{"timestamp": "2026-07-20T14:58:29.106954+00:00", "level": "DEBUG", "logger": "app.auth", "message": "create_access_token secret_length=10 algorithm=HS256 subject=9fce39ba-2741-4e11-92aa-5c9afe832ef4", "request_id": "8eeb3558-4e83-468c-b089-d26522942669", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/login"}
+[AuthFlow] create_access_token secret_length=10 algorithm=HS256 subject=9fce39ba-2741-4e11-92aa-5c9afe832ef4
+{"timestamp": "2026-07-20T14:58:29.107247+00:00", "level": "DEBUG", "logger": "app.auth", "message": "create_refresh_token secret_length=10 algorithm=HS256 subject=9fce39ba-2741-4e11-92aa-5c9afe832ef4", "request_id": "8eeb3558-4e83-468c-b089-d26522942669", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/login"}
+[AuthFlow] create_refresh_token secret_length=10 algorithm=HS256 subject=9fce39ba-2741-4e11-92aa-5c9afe832ef4
+{"timestamp": "2026-07-20T14:58:29.108550+00:00", "level": "INFO", "logger": "app.main", "message": "Request POST /login finished with status 200", "request_id": "8eeb3558-4e83-468c-b089-d26522942669", "user_id": "", "session_id": "", "endpoint": "/login", "latency_ms": 499.72, "status_code": 200, "client_ip": "127.0.0.1", "method": "POST"}
+{"timestamp": "2026-07-20T14:58:29.110551+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: POST http://test/login \"HTTP/1.1 200 OK\"", "request_id": "8eeb3558-4e83-468c-b089-d26522942669", "user_id": "", "session_id": "", "endpoint": "/login"}
+========== LOGIN DEBUG ==========
+EMAIL RECEIVED: student-dashboard@test.com
+USER FOUND: True
+DB EMAIL: student-dashboard@test.com
+HASH: $2b$12$yk7SShBmGpKAtTC2IvcIteP6lPerYSU4D0dvvvgalnfPux.n3Ju6m
+PASSWORD MATCH: True
+================================
+{"timestamp": "2026-07-20T14:58:29.887284+00:00", "level": "INFO", "logger": "app.main", "message": "User logged in successfully: student-dashboard@test.com", "request_id": "06f14c86-2d1e-43f7-9250-5bd6feb454b6", "user_id": "419788b0-f7fa-4d18-850c-920e08f071d8", "session_id": "", "endpoint": "/login"}
+{"timestamp": "2026-07-20T14:58:29.887511+00:00", "level": "DEBUG", "logger": "app.auth", "message": "create_access_token secret_length=10 algorithm=HS256 subject=419788b0-f7fa-4d18-850c-920e08f071d8", "request_id": "06f14c86-2d1e-43f7-9250-5bd6feb454b6", "user_id": "419788b0-f7fa-4d18-850c-920e08f071d8", "session_id": "", "endpoint": "/login"}
+[AuthFlow] create_access_token secret_length=10 algorithm=HS256 subject=419788b0-f7fa-4d18-850c-920e08f071d8
+{"timestamp": "2026-07-20T14:58:29.887753+00:00", "level": "DEBUG", "logger": "app.auth", "message": "create_refresh_token secret_length=10 algorithm=HS256 subject=419788b0-f7fa-4d18-850c-920e08f071d8", "request_id": "06f14c86-2d1e-43f7-9250-5bd6feb454b6", "user_id": "419788b0-f7fa-4d18-850c-920e08f071d8", "session_id": "", "endpoint": "/login"}
+[AuthFlow] create_refresh_token secret_length=10 algorithm=HS256 subject=419788b0-f7fa-4d18-850c-920e08f071d8
+{"timestamp": "2026-07-20T14:58:29.888212+00:00", "level": "INFO", "logger": "app.main", "message": "Request POST /login finished with status 200", "request_id": "06f14c86-2d1e-43f7-9250-5bd6feb454b6", "user_id": "", "session_id": "", "endpoint": "/login", "latency_ms": 515.19, "status_code": 200, "client_ip": "127.0.0.1", "method": "POST"}
+{"timestamp": "2026-07-20T14:58:29.889499+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: POST http://test/login \"HTTP/1.1 200 OK\"", "request_id": "06f14c86-2d1e-43f7-9250-5bd6feb454b6", "user_id": "", "session_id": "", "endpoint": "/login"}
+{"timestamp": "2026-07-20T14:58:29.900103+00:00", "level": "DEBUG", "logger": "app.auth", "message": "get_current_user authorization_header='Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5ZmNlMzliYS0yNzQxLTRlMTEtOTJhYS01YzlhZmU4MzJlZjQiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0NTYwNDA5fQ.cqyZTkSeRyDoinEJAIgy_9PrGVUYUQGj5_H3g1SowEk'", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "", "session_id": "", "endpoint": "/api/ble/dashboard"}
+[AuthFlow] authorization_header='Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5ZmNlMzliYS0yNzQxLTRlMTEtOTJhYS01YzlhZmU4MzJlZjQiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0NTYwNDA5fQ.cqyZTkSeRyDoinEJAIgy_9PrGVUYUQGj5_H3g1SowEk'
+{"timestamp": "2026-07-20T14:58:29.900289+00:00", "level": "DEBUG", "logger": "app.auth", "message": "get_current_user bearer_token_prefix='eyJhbGciOiJIUzI1NiIsInR5cCI6Ik'", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "", "session_id": "", "endpoint": "/api/ble/dashboard"}
+[AuthFlow] bearer_token_prefix='eyJhbGciOiJIUzI1NiIsInR5cCI6Ik'
+{"timestamp": "2026-07-20T14:58:29.900417+00:00", "level": "DEBUG", "logger": "app.auth", "message": "get_current_user jwt_secret_length=10 jwt_algorithm=HS256", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "", "session_id": "", "endpoint": "/api/ble/dashboard"}
+[AuthFlow] jwt_secret_length=10 jwt_algorithm=HS256
+{"timestamp": "2026-07-20T14:58:31.908630+00:00", "level": "WARNING", "logger": "app.rate_limit", "message": "Redis unavailable, using in-memory rate limiting: Timeout connecting to server", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "", "session_id": "", "endpoint": "/api/ble/dashboard"}
+{"timestamp": "2026-07-20T14:58:31.910342+00:00", "level": "DEBUG", "logger": "app.auth", "message": "get_current_user decoded_jwt_payload={'sub': '9fce39ba-2741-4e11-92aa-5c9afe832ef4', 'type': 'access', 'exp': 1784560409}", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "", "session_id": "", "endpoint": "/api/ble/dashboard"}
+[AuthFlow] decoded_jwt_payload={'sub': '9fce39ba-2741-4e11-92aa-5c9afe832ef4', 'type': 'access', 'exp': 1784560409}
+[AuthFlow] sub_claim='9fce39ba-2741-4e11-92aa-5c9afe832ef4'
+[AuthFlow] type_claim='access'
+{"timestamp": "2026-07-20T14:58:31.920756+00:00", "level": "INFO", "logger": "app.services.ble_service", "message": "BLE dashboard endpoint called by user=9fce39ba-2741-4e11-92aa-5c9afe832ef4", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/api/ble/dashboard"}
+{"timestamp": "2026-07-20T14:58:31.938715+00:00", "level": "INFO", "logger": "app.services.ble_service", "message": "Dashboard lookup: legacy=2ea10483-67c2-440b-8fea-0e92494be9da ble=2ea10483-67c2-440b-8fea-0e92494be9da status=BleSessionStatus.ACTIVE", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/api/ble/dashboard"}
+{"timestamp": "2026-07-20T14:58:31.947683+00:00", "level": "INFO", "logger": "app.services.ble_service", "message": "BLE dashboard active session selected session=2ea10483-67c2-440b-8fea-0e92494be9da registered_devices=1 students_seen=0 packets_received=0", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/api/ble/dashboard"}
+{"timestamp": "2026-07-20T14:58:31.948036+00:00", "level": "INFO", "logger": "app.services.ble_service", "message": "Dashboard metrics session_id=2ea10483-67c2-440b-8fea-0e92494be9da observation_count=0 students_seen=0 packets_received=0 average_rssi=None latest_observation=None", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/api/ble/dashboard"}
+{"timestamp": "2026-07-20T14:58:31.948215+00:00", "level": "INFO", "logger": "app.services.ble_service", "message": "Dashboard updated session=2ea10483-67c2-440b-8fea-0e92494be9da registered_devices=1 students_seen=0 packets_received=0", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "9fce39ba-2741-4e11-92aa-5c9afe832ef4", "session_id": "", "endpoint": "/api/ble/dashboard"}
+{"timestamp": "2026-07-20T14:58:31.948913+00:00", "level": "INFO", "logger": "app.main", "message": "Request GET /api/ble/dashboard finished with status 200", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "", "session_id": "", "endpoint": "/api/ble/dashboard", "latency_ms": 2050.26, "status_code": 200, "client_ip": "127.0.0.1", "method": "GET"}
+{"timestamp": "2026-07-20T14:58:31.950569+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://test/api/ble/dashboard \"HTTP/1.1 200 OK\"", "request_id": "f99141df-2c74-467c-bd4f-98eb73bd0a89", "user_id": "", "session_id": "", "endpoint": "/api/ble/dashboard"}
+------------------------------ Captured log call ------------------------------
+INFO     app.main:main.py:333 User logged in successfully: teacher-dashboard@test.com
+DEBUG    app.auth:auth.py:39 create_access_token secret_length=10 algorithm=HS256 subject=9fce39ba-2741-4e11-92aa-5c9afe832ef4
+DEBUG    app.auth:auth.py:55 create_refresh_token secret_length=10 algorithm=HS256 subject=9fce39ba-2741-4e11-92aa-5c9afe832ef4
+INFO     app.main:main.py:213 Request POST /login finished with status 200
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/login "HTTP/1.1 200 OK"
+INFO     app.main:main.py:333 User logged in successfully: student-dashboard@test.com
+DEBUG    app.auth:auth.py:39 create_access_token secret_length=10 algorithm=HS256 subject=419788b0-f7fa-4d18-850c-920e08f071d8
+DEBUG    app.auth:auth.py:55 create_refresh_token secret_length=10 algorithm=HS256 subject=419788b0-f7fa-4d18-850c-920e08f071d8
+INFO     app.main:main.py:213 Request POST /login finished with status 200
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/login "HTTP/1.1 200 OK"
+DEBUG    app.auth:auth.py:70 get_current_user authorization_header='Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5ZmNlMzliYS0yNzQxLTRlMTEtOTJhYS01YzlhZmU4MzJlZjQiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0NTYwNDA5fQ.cqyZTkSeRyDoinEJAIgy_9PrGVUYUQGj5_H3g1SowEk'
+DEBUG    app.auth:auth.py:77 get_current_user bearer_token_prefix='eyJhbGciOiJIUzI1NiIsInR5cCI6Ik'
+DEBUG    app.auth:auth.py:82 get_current_user jwt_secret_length=10 jwt_algorithm=HS256
+WARNING  app.rate_limit:rate_limit.py:36 Redis unavailable, using in-memory rate limiting: Timeout connecting to server
+DEBUG    app.auth:auth.py:99 get_current_user decoded_jwt_payload={'sub': '9fce39ba-2741-4e11-92aa-5c9afe832ef4', 'type': 'access', 'exp': 1784560409}
+INFO     app.services.ble_service:ble_service.py:319 BLE dashboard endpoint called by user=9fce39ba-2741-4e11-92aa-5c9afe832ef4
+INFO     app.services.ble_service:ble_service.py:364 Dashboard lookup: legacy=2ea10483-67c2-440b-8fea-0e92494be9da ble=2ea10483-67c2-440b-8fea-0e92494be9da status=BleSessionStatus.ACTIVE
+INFO     app.services.ble_service:ble_service.py:402 BLE dashboard active session selected session=2ea10483-67c2-440b-8fea-0e92494be9da registered_devices=1 students_seen=0 packets_received=0
+INFO     app.services.ble_service:ble_service.py:413 Dashboard metrics session_id=2ea10483-67c2-440b-8fea-0e92494be9da observation_count=0 students_seen=0 packets_received=0 average_rssi=None latest_observation=None
+INFO     app.services.ble_service:ble_service.py:422 Dashboard updated session=2ea10483-67c2-440b-8fea-0e92494be9da registered_devices=1 students_seen=0 packets_received=0
+INFO     app.main:main.py:213 Request GET /api/ble/dashboard finished with status 200
+INFO     httpx:_client.py:1740 HTTP Request: GET http://test/api/ble/dashboard "HTTP/1.1 200 OK"
+=========================== short test summary info ===========================
+FAILED server\tests\phase_27a\test_ble_service_and_api.py::test_ble_dashboard_reports_active_session_metrics
+1 failed, 10 passed in 69.17s (0:01:09)

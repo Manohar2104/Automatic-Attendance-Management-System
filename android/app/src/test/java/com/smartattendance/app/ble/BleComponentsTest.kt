@@ -9,6 +9,8 @@ import com.smartattendance.app.data.PreferencesManager
 import com.smartattendance.app.network.ApiClient
 import com.smartattendance.app.network.BleDeviceRegistrationRequest
 import com.smartattendance.app.network.AttendanceApi
+import com.smartattendance.app.network.ActiveSessionResponse
+import com.smartattendance.app.network.SessionInfo
 import com.smartattendance.app.network.BleObservationUploadRequest
 import com.smartattendance.app.network.BleObservationUploadResponse
 import io.mockk.clearAllMocks
@@ -112,8 +114,8 @@ class BleComponentsTest {
 
         @Test
         fun generatePayloadBuildsExpectedAdvertisementLayout() = runTest {
-            mockkStatic(ParcelUuid::class)
-            every { ParcelUuid.fromString(any()) } returns ParcelUuid(UUID.randomUUID())
+            mockkStatic(Log::class)
+            every { Log.d(any(), any()) } returns 0
 
             val context = mockk<Context>(relaxed = true)
             val preferencesManager = mockk<PreferencesManager>()
@@ -196,6 +198,47 @@ class BleComponentsTest {
             assertEquals("device-seed-123", body["device_hash"].asString)
             assertEquals("student@example.com", body["public_identifier"].asString)
             assertEquals(32, body["anonymous_ble_id"].asString.length)
+
+            server.shutdown()
+        }
+    }
+
+    @Nested
+    inner class ActiveSessionApiTest {
+        @Test
+        fun getActiveSessionParsesGlobalSessionResponseAndSendsAuthorization() = runTest {
+            val server = MockWebServer()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody(
+                        """
+                        {
+                          "active": true,
+                          "session": {
+                            "id": "session-1",
+                            "course_id": "BLE-101",
+                            "status": "ACTIVE",
+                            "location": "Room 101",
+                            "scheduled_start": "2026-07-20T00:00:00Z",
+                            "scheduled_end": "2026-07-20T01:00:00Z"
+                          }
+                        }
+                        """.trimIndent()
+                    )
+            )
+            server.start()
+
+            val api = ApiClient(server.url("/").toString()).api
+            val response = api.getActiveSession("Bearer token-123")
+
+            assertTrue(response.active)
+            assertNotNull(response.session)
+            assertEquals("session-1", response.session?.id)
+
+            val request = server.takeRequest()
+            assertEquals("/api/sessions/active", request.path)
+            assertEquals("Bearer token-123", request.getHeader("Authorization"))
 
             server.shutdown()
         }
