@@ -24,6 +24,8 @@ from .models import (
     Attendance,
     AttendanceStatus,
     AttendanceOverride,
+    Session,
+    SessionStatus,
 )
 import uuid
 import time
@@ -492,13 +494,13 @@ async def compute_attendance(
     """
     from .schemas import ComputeAttendanceResponse, AttendanceResult
 
+    sess_q = await db.execute(select(Session).where(Session.id == session_id))
+    sess_obj = sess_q.scalars().first()
+
     # Auto-populate location_filter from the session's assigned room if not provided
-    if not location_filter:
-        sess_q = await db.execute(select(Session).where(Session.id == session_id))
-        sess_obj = sess_q.scalars().first()
-        if sess_obj and sess_obj.location:
-            location_filter = sess_obj.location
-            logger.info(f"Auto-set location_filter='{location_filter}' from session {session_id}")
+    if not location_filter and sess_obj and sess_obj.location:
+        location_filter = sess_obj.location
+        logger.info(f"Auto-set location_filter='{location_filter}' from session {session_id}")
 
     q = await db.execute(select(Event).where(Event.session_id == session_id))
     events = q.scalars().all()
@@ -558,6 +560,17 @@ async def compute_attendance(
     # Compute for union of user_events and existing_attendances to preserve overrides/history
     all_student_ids = set(user_events.keys()).union(existing_attendances.keys())
 
+    # Filter out the faculty_id from the student list
+    faculty_scans_count = 0
+    if sess_obj and sess_obj.faculty_id:
+        faculty_evs = user_events.get(sess_obj.faculty_id, [])
+        faculty_scans_count = sum(1 for e in faculty_evs if e.type == EventType.ENTER)
+        if sess_obj.faculty_id in all_student_ids:
+            all_student_ids.remove(sess_obj.faculty_id)
+
+    # Use professor's valid scans as baseline. Fall back to expected max_possible if 0.
+    baseline_scans = faculty_scans_count if faculty_scans_count > 0 else (max_possible or 1)
+
     results = []
     bound_count = 0
     for user_id in all_student_ids:
@@ -566,20 +579,8 @@ async def compute_attendance(
             bound_count += 1
         enter_count = sum(1 for e in evs if e.type == EventType.ENTER)
 
-        # Calculate expected scan cycles for this user based on their active scanning window
-        if evs:
-            user_timestamps = [e.timestamp for e in evs if e.timestamp is not None]
-            if user_timestamps and len(user_timestamps) > 1:
-                user_duration = int((max(user_timestamps) - min(user_timestamps)).total_seconds())
-                # Expected cycles = (duration // interval) + 1
-                user_max_possible = max(1, (user_duration // settings.submission_interval_seconds) + 1)
-            else:
-                user_max_possible = 1
-        else:
-            user_max_possible = max_possible or 1
-
         raw_score = (
-            min(100, int((enter_count / user_max_possible) * 100)) if user_max_possible else 0
+            min(100, int((enter_count / baseline_scans) * 100)) if baseline_scans else 0
         )
         status_enum = (
             AttendanceStatus.PRESENT
