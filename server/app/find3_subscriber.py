@@ -12,6 +12,9 @@ from sqlalchemy import select, and_
 
 log = logging.getLogger("find3_subscriber")
 
+# Imported lazily inside _handle_find3_message to avoid circular imports.
+# The scheduler is called on-demand each time find3 reports a location update.
+
 
 class Find3Subscriber:
     def __init__(self, ws_url: str):
@@ -74,6 +77,16 @@ class Find3Subscriber:
         await self._persist_event(
             full_fingerprint, None, location, event_type, timestamp_ms
         )
+
+        # On-demand session check: run immediately after every find3 update so
+        # session state changes (start/end) react to the teacher's location in
+        # real time instead of waiting for the next scheduler poll.
+        try:
+            from .session_scheduler import check_and_process_sessions
+            await check_and_process_sessions()
+            log.debug("On-demand session check triggered by find3 event (location: %s)", location)
+        except Exception:
+            log.exception("On-demand session check failed after find3 event")
 
     async def _persist_event(
         self, device_fingerprint, session_id, location, event_type, timestamp_ms=None

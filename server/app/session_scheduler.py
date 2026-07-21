@@ -16,6 +16,12 @@ from app.db import get_sessionmaker
 
 logger = logging.getLogger(__name__)
 
+# find3 needs at least this many scans at a location before its prediction is
+# reliable. Requiring this many ENTER events prevents a single noisy reading
+# (e.g., a corridor scan briefly classified as the classroom) from activating
+# a session prematurely.
+MIN_LOCATION_CONFIRMATIONS = 3
+
 
 async def check_and_process_sessions(session: AsyncSession = None) -> None:
     """
@@ -52,30 +58,35 @@ async def _auto_start_sessions(session: AsyncSession) -> None:
     sessions_to_start = result.scalars().all()
 
     for sess in sessions_to_start:
-        # First try: check if the specific assigned faculty is present in this location
+        # Check if the specific assigned faculty is present in this location.
+        # NOTE: We deliberately do NOT fall back to a location-agnostic check here.
+        # If the teacher is in the corridor (a different zone), their ENTER event
+        # must NOT activate a session for a room they haven't entered yet.
         is_faculty_present = await _is_faculty_present_in_location(
             session, sess.location, faculty_id=sess.faculty_id
         )
 
-        if not is_faculty_present and sess.faculty_id:
-            # Fallback: check if the faculty has ANY recent event (anywhere) —
-            # this covers the case where find3 is deployed but location calibration
-            # hasn't been done yet, so all events land with location="unknown".
-            is_faculty_present = await _has_any_recent_faculty_event(
-                session, faculty_id=sess.faculty_id
-            )
-
         if not is_faculty_present:
-            # Grace period fallback: if the session is more than 3 minutes past its
-            # scheduled start and still SCHEDULED, auto-start it regardless.
-            # This handles the case where find3 is not deployed at all.
+            # Grace-period fallback: only fires when find3 is COMPLETELY offline.
+            # If find3 IS tracking the faculty (e.g. they are in the corridor or any
+            # other mapped zone), that means find3 is working — the teacher just hasn't
+            # entered the classroom yet. In that case we must NOT start the session.
             minutes_past_start = (now - sess.scheduled_start).total_seconds() / 60
             if minutes_past_start >= 3:
-                logger.info(
-                    f"Grace-period auto-starting session {sess.id} "
-                    f"({minutes_past_start:.1f}m past start, find3 may be offline)"
+                find3_is_tracking = await _is_find3_tracking_faculty(
+                    session, faculty_id=sess.faculty_id
                 )
-                is_faculty_present = True
+                if not find3_is_tracking:
+                    logger.info(
+                        f"Grace-period auto-starting session {sess.id} "
+                        f"({minutes_past_start:.1f}m past start, find3 appears offline)"
+                    )
+                    is_faculty_present = True
+                else:
+                    logger.debug(
+                        f"Session {sess.id}: faculty is being tracked by find3 "
+                        f"but not in session location '{sess.location}' — not starting"
+                    )
 
         if is_faculty_present:
             logger.info(f"Auto-starting session {sess.id} (location: {sess.location})")
@@ -104,11 +115,17 @@ async def _auto_end_sessions(session: AsyncSession) -> None:
 
 
 async def _is_faculty_present_in_location(
-    session: AsyncSession, location: str, faculty_id = None, minutes_ago: int = 5
+    session: AsyncSession, location: str, faculty_id = None, minutes_ago: int = 1
 ) -> bool:
     """
-    Check if the specific faculty member (or any faculty member, if faculty_id is None)
-    has been present in the location recently. Looks at events from the past N minutes.
+    Check if the faculty has been confirmed in this location within the last
+    minute. Requires MIN_LOCATION_CONFIRMATIONS ENTER events to account for
+    find3's need for 3 scans before its location prediction stabilises.
+
+    Window is set to 1 minute because find3 produces 3 scans/minute — so
+    all required confirmations must come from fresh, current-minute scans.
+    Events older than 1 minute (e.g. from when the teacher was in the corridor)
+    are intentionally excluded.
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
 
@@ -139,36 +156,53 @@ async def _is_faculty_present_in_location(
     result = await session.execute(stmt)
     events = result.scalars().all()
 
-    faculty_present = len(events) > 0
+    faculty_present = len(events) >= MIN_LOCATION_CONFIRMATIONS
     logger.debug(
         f"Faculty (id: {faculty_id}) present in {location}: {faculty_present} "
-        f"({len(events)} recent ENTER events)"
+        f"({len(events)}/{MIN_LOCATION_CONFIRMATIONS} required ENTER events)"
     )
 
     return faculty_present
 
 
-async def _has_any_recent_faculty_event(
-    session: AsyncSession, faculty_id, minutes_ago: int = 10
+async def _is_find3_tracking_faculty(
+    session: AsyncSession, faculty_id, minutes_ago: int = 2
 ) -> bool:
     """
-    Fallback check: has this faculty sent ANY presence event recently,
-    regardless of location? Used when find3 location calibration is incomplete
-    and events land with location='unknown'.
+    Returns True if find3 has sent ANY recent event for this faculty member,
+    regardless of location. Used exclusively to detect whether find3 is online.
+
+    Window is 2 minutes (slightly wider than the 1-minute presence window) to
+    absorb occasional scan delays without incorrectly treating find3 as offline.
+
+    If this returns True but _is_faculty_present_in_location returns False, it
+    means find3 is working but the teacher is in a different zone (e.g. corridor).
+    In that case the session must NOT be auto-started — the teacher simply hasn't
+    arrived at the classroom yet.
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+
+    if faculty_id:
+        faculty_ids = [faculty_id]
+    else:
+        stmt = select(User).where(User.role == RoleEnum.FACULTY)
+        result = await session.execute(stmt)
+        faculty_ids = [u.id for u in result.scalars().all()]
+        if not faculty_ids:
+            return False
+
     stmt = select(Event).where(
         and_(
-            Event.user_id == faculty_id,
+            Event.user_id.in_(faculty_ids),
             Event.type == EventType.ENTER,
             Event.timestamp >= cutoff_time,
         )
     )
     result = await session.execute(stmt)
     events = result.scalars().all()
-    has_events = len(events) > 0
+    is_tracking = len(events) > 0
     logger.debug(
-        f"Faculty (id: {faculty_id}) any-location presence: {has_events} "
-        f"({len(events)} events in last {minutes_ago}m)"
+        f"find3 tracking faculty (id: {faculty_id}): {is_tracking} "
+        f"({len(events)} events in last {minutes_ago}m, any location)"
     )
-    return has_events
+    return is_tracking

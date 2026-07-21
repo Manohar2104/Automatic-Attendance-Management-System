@@ -54,13 +54,20 @@ logger = logging.getLogger(__name__)
 
 
 async def session_scheduler_task():
-    """Background task that periodically processes session state transitions."""
+    """Background fallback task that periodically processes session state transitions.
+
+    Session activation is now primarily event-driven: the find3 subscriber triggers
+    check_and_process_sessions() immediately on every location update. This 60-second
+    poll acts as a safety net for:
+      - Auto-ending sessions whose scheduled_end has passed
+      - Recovery if the find3 WebSocket was temporarily disconnected
+    """
     while True:
         try:
             await check_and_process_sessions()
         except Exception as e:
             logger.error(f"Error in session scheduler: {e}", exc_info=True)
-        await asyncio.sleep(15)  # Run every 15 seconds for fast session activation
+        await asyncio.sleep(60)  # Fallback poll — real activation is event-driven via find3
 
 
 @asynccontextmanager
