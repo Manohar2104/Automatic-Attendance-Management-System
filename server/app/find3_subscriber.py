@@ -98,18 +98,21 @@ class Find3Subscriber:
                 user_id = row.user_id if row else None
 
                 # Resolve session_id from active sessions at this location if not provided
+                # NEVER link corridor/hallway events to a classroom session
                 if not session_id and location:
-                    sess_q = await db.execute(
-                        select(DbSession).where(
-                            and_(
-                                DbSession.location == location,
-                                DbSession.status == SessionStatus.ACTIVE,
+                    loc_lower = location.lower() if location else ""
+                    if "corridor" not in loc_lower and "hallway" not in loc_lower:
+                        sess_q = await db.execute(
+                            select(DbSession).where(
+                                and_(
+                                    DbSession.location == location,
+                                    DbSession.status == SessionStatus.ACTIVE,
+                                )
                             )
                         )
-                    )
-                    active_sess = sess_q.scalars().first()
-                    if active_sess:
-                        session_id = str(active_sess.id)
+                        active_sess = sess_q.scalars().first()
+                        if active_sess:
+                            session_id = str(active_sess.id)
 
                 ts = (
                     datetime.datetime.fromtimestamp(

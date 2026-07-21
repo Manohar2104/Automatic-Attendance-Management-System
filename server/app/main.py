@@ -462,7 +462,17 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
         db.add(binding)
     await db.commit()
     await db.refresh(ev)
-    return {"id": str(ev.id)}
+@app.post("/find3-data")
+async def proxy_find3_data(payload: dict):
+    """Proxy FIND3 sensor payloads from mobile devices directly to the FIND3 container."""
+    import httpx
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.post("http://find3:8003/data", json=payload, timeout=5.0)
+            return res.json()
+        except Exception as e:
+            logger.error(f"Error proxying FIND3 data: {e}")
+            return {"error": str(e), "guesses": []}
 
 
 @app.post("/compute-attendance/{session_id}")
@@ -472,11 +482,28 @@ async def compute_attendance(
     """
     Compute attendance for a session with location-based validation.
     If location_filter is provided, only count events from that location.
+    Corridor/hallway events are ALWAYS excluded regardless of location_filter.
     """
     from .schemas import ComputeAttendanceResponse, AttendanceResult
 
+    # Auto-populate location_filter from the session's assigned room if not provided
+    if not location_filter:
+        sess_q = await db.execute(select(Session).where(Session.id == session_id))
+        sess_obj = sess_q.scalars().first()
+        if sess_obj and sess_obj.location:
+            location_filter = sess_obj.location
+            logger.info(f"Auto-set location_filter='{location_filter}' from session {session_id}")
+
     q = await db.execute(select(Event).where(Event.session_id == session_id))
     events = q.scalars().all()
+
+    # ALWAYS exclude corridor/hallway events from attendance computation
+    events = [
+        e for e in events
+        if not e.location or not any(
+            tag in e.location.lower() for tag in ("corridor", "hallway")
+        )
+    ]
 
     # Filter events by location if provided
     if location_filter:
@@ -532,17 +559,26 @@ async def compute_attendance(
         if evs:
             bound_count += 1
         enter_count = sum(1 for e in evs if e.type == EventType.ENTER)
+
+        # Calculate expected scan cycles for this user based on their active scanning window
+        if evs:
+            user_timestamps = [e.timestamp for e in evs if e.timestamp is not None]
+            if user_timestamps and len(user_timestamps) > 1:
+                user_duration = int((max(user_timestamps) - min(user_timestamps)).total_seconds())
+                # Expected cycles = (duration // interval) + 1
+                user_max_possible = max(1, (user_duration // settings.submission_interval_seconds) + 1)
+            else:
+                user_max_possible = 1
+        else:
+            user_max_possible = max_possible or 1
+
         raw_score = (
-            min(100, int((enter_count / max_possible) * 100)) if max_possible else 0
+            min(100, int((enter_count / user_max_possible) * 100)) if user_max_possible else 0
         )
         status_enum = (
             AttendanceStatus.PRESENT
             if raw_score >= settings.present_threshold_percent
-            else (
-                AttendanceStatus.PARTIAL
-                if raw_score >= settings.partial_threshold_percent
-                else AttendanceStatus.ABSENT
-            )
+            else AttendanceStatus.ABSENT
         )
 
         attendance = existing_attendances.get(user_id)
@@ -757,6 +793,47 @@ async def bulk_upload_timetable(
             }
             for s in created
         ],
+    }
+
+
+@app.patch("/sessions/{session_id}/status")
+async def update_session_status(
+    session_id: str,
+    status: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_current_user),
+):
+    """Manually update session status (SCHEDULED, ACTIVE, COMPLETED)."""
+    from .models import Session, SessionStatus, RoleEnum
+
+    if current_user.role not in (RoleEnum.ADMIN, RoleEnum.FACULTY):
+        raise HTTPException(status_code=403, detail="Only admins and faculty can update session status")
+
+    q = await db.execute(select(Session).where(Session.id == session_id))
+    sess = q.scalars().first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        new_status = SessionStatus[status.upper()]
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}. Must be SCHEDULED, ACTIVE, or COMPLETED.")
+
+    sess.status = new_status
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if new_status == SessionStatus.ACTIVE and not sess.actual_start:
+        sess.actual_start = now
+    elif new_status == SessionStatus.COMPLETED and not sess.actual_end:
+        sess.actual_end = now
+
+    db.add(sess)
+    await db.commit()
+    await db.refresh(sess)
+    return {
+        "id": str(sess.id),
+        "status": sess.status.value,
+        "actual_start": sess.actual_start.isoformat() if sess.actual_start else None,
+        "actual_end": sess.actual_end.isoformat() if sess.actual_end else None,
     }
 
 

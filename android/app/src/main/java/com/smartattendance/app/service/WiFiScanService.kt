@@ -71,13 +71,7 @@ class WiFiScanService : Service() {
         
         if (deviceId.isBlank() || serverUrl.isBlank()) return
 
-        val host = try {
-            val uri = java.net.URI(serverUrl)
-            uri.host ?: "127.0.0.1"
-        } catch (e: Exception) {
-            "127.0.0.1"
-        }
-        val find3Url = "http://$host:8005/data"
+        val find3Url = if (serverUrl.endsWith("/")) "${serverUrl}find3-data" else "$serverUrl/find3-data"
 
         val wifiJson = JSONObject()
         for (res in scanResults) {
@@ -214,6 +208,6 @@ class WiFiScanService : Service() {
     companion object {
         const val SCAN_RESULT_ACTION = "com.smartattendance.SCAN_RESULT"
         const val NOTIFICATION_ID = 1001
-        private const val SCAN_INTERVAL_MS = 60_000L
+        private const val SCAN_INTERVAL_MS = 10_000L
     }
 }

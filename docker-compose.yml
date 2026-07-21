@@ -63,6 +63,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      find3:
+        condition: service_started
 
 volumes:
   postgres_data:
