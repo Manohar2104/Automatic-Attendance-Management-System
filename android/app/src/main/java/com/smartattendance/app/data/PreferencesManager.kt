@@ -25,6 +25,8 @@ class PreferencesManager(private val context: Context) {
         val USER_ROLE = stringPreferencesKey("user_role")
         val ACCESS_TOKEN = stringPreferencesKey("access_token")
         val LAST_LOCATION = stringPreferencesKey("last_location")
+        val TOTAL_SCANS = androidx.datastore.preferences.core.intPreferencesKey("total_scans")
+        val VALID_SCANS = androidx.datastore.preferences.core.intPreferencesKey("valid_scans")
 
         const val DEFAULT_SERVER_URL = "http://snoxmo-ip-152-57-4-61.tunnelmole.net"
     }
@@ -65,6 +67,14 @@ class PreferencesManager(private val context: Context) {
         prefs[LAST_LOCATION] ?: ""
     }
 
+    val totalScans: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[TOTAL_SCANS] ?: 0
+    }
+
+    val validScans: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[VALID_SCANS] ?: 0
+    }
+
     suspend fun saveServerUrl(url: String) {
         context.dataStore.edit { it[SERVER_URL] = url }
     }
@@ -99,5 +109,23 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun saveLastLocation(location: String) {
         context.dataStore.edit { it[LAST_LOCATION] = location }
+    }
+
+    suspend fun recordScanResult(isValid: Boolean) {
+        context.dataStore.edit { prefs ->
+            val currentTotal = prefs[TOTAL_SCANS] ?: 0
+            val currentValid = prefs[VALID_SCANS] ?: 0
+            prefs[TOTAL_SCANS] = currentTotal + 1
+            if (isValid) {
+                prefs[VALID_SCANS] = currentValid + 1
+            }
+        }
+    }
+
+    suspend fun resetScanCounts() {
+        context.dataStore.edit { prefs ->
+            prefs[TOTAL_SCANS] = 0
+            prefs[VALID_SCANS] = 0
+        }
     }
 }

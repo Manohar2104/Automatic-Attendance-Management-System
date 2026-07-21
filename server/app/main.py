@@ -466,10 +466,16 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
 async def proxy_find3_data(payload: dict):
     """Proxy FIND3 sensor payloads from mobile devices directly to the FIND3 container."""
     import httpx
+    device_id = payload.get("d") or payload.get("device") or "unknown_device"
     async with httpx.AsyncClient() as client:
         try:
             res = await client.post("http://find3:8003/data", json=payload, timeout=5.0)
-            return res.json()
+            res_json = res.json()
+            guesses = res_json.get("guesses", [])
+            top_guess = guesses[0].get("location") if guesses else "None"
+            top_prob = guesses[0].get("probability", 0.0) if guesses else 0.0
+            logger.info(f"FIND3 SCAN PROXIED: device={device_id} | guess='{top_guess}' (prob={top_prob*100:.1f}%)")
+            return res_json
         except Exception as e:
             logger.error(f"Error proxying FIND3 data: {e}")
             return {"error": str(e), "guesses": []}

@@ -109,17 +109,30 @@ class WiFiScanService : Service() {
                             val guesses = json.optJSONArray("guesses")
                             if (guesses != null && guesses.length() > 0) {
                                 val bestGuess = guesses.getJSONObject(0)
-                                val detectedLocation = bestGuess.optString("location", "")
-                                if (detectedLocation.isNotBlank()) {
-                                    prefs.saveLastLocation(detectedLocation)
-                                    Log.d("WiFiScanService", "Location detected: $detectedLocation")
+                                val prob = bestGuess.optDouble("probability", 0.0)
+                                if (prob >= 0.70) {
+                                    val detectedLocation = bestGuess.optString("location", "")
+                                    val isCorridor = detectedLocation.lowercase().contains("corridor") || detectedLocation.lowercase().contains("hallway")
+                                    if (detectedLocation.isNotBlank() && !isCorridor) {
+                                        prefs.saveLastLocation(detectedLocation)
+                                        prefs.recordScanResult(true)
+                                        Log.d("WiFiScanService", "Location detected: $detectedLocation")
+                                    } else {
+                                        prefs.saveLastLocation(detectedLocation)
+                                        prefs.recordScanResult(false)
+                                        Log.d("WiFiScanService", "Find3 returned corridor/empty location")
+                                    }
                                 } else {
-                                    Log.d("WiFiScanService", "Find3 returned empty location")
+                                    prefs.saveLastLocation("unknown")
+                                    prefs.recordScanResult(false)
+                                    Log.d("WiFiScanService", "Discarded low-confidence location guess (probability $prob < 0.70)")
                                 }
                             } else {
+                                prefs.recordScanResult(false)
                                 Log.d("WiFiScanService", "No guesses in find3 response yet")
                             }
                         } catch (parseEx: Exception) {
+                            prefs.recordScanResult(false)
                             Log.w("WiFiScanService", "Could not parse find3 location: ${parseEx.message}")
                         }
                     }

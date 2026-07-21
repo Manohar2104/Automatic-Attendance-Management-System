@@ -110,8 +110,8 @@ async def _is_faculty_in_corridor(
     session: AsyncSession, faculty_id, minutes_ago: int = 5
 ) -> bool:
     """
-    Check if the faculty member's most recent presence event is in a corridor/hallway.
-    Returns True if teacher is in corridor, blocking auto-start.
+    Check if the faculty member's most recent known location is in a corridor/hallway.
+    Ignores 'unknown' locations when looking for the latest known position.
     """
     if not faculty_id:
         return False
@@ -123,6 +123,8 @@ async def _is_faculty_in_corridor(
             and_(
                 Event.user_id == faculty_id,
                 Event.type == EventType.ENTER,
+                Event.location != None,
+                Event.location != "unknown",
                 Event.timestamp >= cutoff_time,
             )
         )
@@ -144,8 +146,10 @@ async def _is_faculty_present_in_location(
     session: AsyncSession, location: str, faculty_id = None, minutes_ago: int = 3, min_scans: int = 2
 ) -> bool:
     """
-    Check if the assigned faculty is STABLY present inside the classroom.
-    Requires at least min_scans (default 2) inside the room spanning >= 10s apart.
+    Check if the assigned faculty is CURRENTLY & STABLY present inside the classroom.
+    - Latest non-unknown location MUST be the assigned classroom.
+    - No corridor/hallway events must exist after the first classroom scan.
+    - Requires at least min_scans (default 2) inside the room spanning >= 10s apart.
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
 
@@ -159,22 +163,49 @@ async def _is_faculty_present_in_location(
             return False
         faculty_ids = [f.id for f in faculty_users]
 
-    stmt = select(Event).where(
-        and_(
-            Event.user_id.in_(faculty_ids),
-            Event.location == location,
-            Event.type == EventType.ENTER,
-            Event.timestamp >= cutoff_time,
+    # Fetch ALL recent non-unknown location events for faculty ordered by timestamp
+    stmt = (
+        select(Event)
+        .where(
+            and_(
+                Event.user_id.in_(faculty_ids),
+                Event.type == EventType.ENTER,
+                Event.location != None,
+                Event.location != "unknown",
+                Event.timestamp >= cutoff_time,
+            )
         )
-    ).order_by(Event.timestamp.asc())
+        .order_by(Event.timestamp.asc())
+    )
     result = await session.execute(stmt)
-    events = result.scalars().all()
+    all_events = result.scalars().all()
 
-    if len(events) < min_scans:
+    if not all_events:
         return False
 
-    # Check that events span at least 10 seconds apart (confirmed sustained presence)
-    timestamps = [e.timestamp for e in events if e.timestamp]
+    # 1. The LATEST non-unknown location MUST be the target classroom
+    latest_loc = all_events[-1].location
+    if latest_loc != location:
+        logger.debug(f"Faculty latest location is '{latest_loc}', not '{location}'. Skipping auto-start.")
+        return False
+
+    # 2. Filter for target classroom events
+    room_events = [e for e in all_events if e.location == location]
+    if len(room_events) < min_scans:
+        return False
+
+    # 3. Ensure no corridor/hallway events occurred AFTER the first room event
+    first_room_ts = room_events[0].timestamp
+    corridor_after = [
+        e for e in all_events
+        if e.timestamp >= first_room_ts and any(tag in e.location.lower() for tag in ("corridor", "hallway"))
+    ]
+    if corridor_after:
+        logger.info(f"Corridor event detected after room scan for session room {location}. Skipping auto-start.")
+        return False
+
+    # 4. Check that room events span at least 10 seconds apart
+    timestamps = [e.timestamp for e in room_events if e.timestamp]
     if len(timestamps) >= 2:
         time_span = (max(timestamps) - min(timestamps)).total_seconds()
         if time_span >= 10:

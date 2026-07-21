@@ -62,11 +62,23 @@ class Find3Subscriber:
         device_fingerprint = sensors.get("d") or sensors.get("device")
         family = sensors.get("f")
         timestamp_ms = sensors.get("t")
-        location = sensors.get("l") or (guesses[0].get("location") if guesses else None)
+        location = sensors.get("l")
+        top_loc = guesses[0].get("location") if guesses else "None"
+        top_prob = guesses[0].get("probability", 0.0) if guesses else 0.0
+
+        if not location and guesses:
+            if top_prob >= 0.70:
+                location = top_loc
+            else:
+                location = "unknown"
 
         if not device_fingerprint or not family:
             log.debug("Missing device or family in find3 message")
             return
+
+        log.info(
+            f"FIND3 EVENT: device={device_fingerprint} | top_guess='{top_loc}' (prob={top_prob*100:.1f}%) | assigned='{location}'"
+        )
 
         full_fingerprint = f"{family}:{device_fingerprint}"
         event_type = "ENTER"

@@ -61,6 +61,8 @@ class MainActivity : FragmentActivity() {
             var scanning by remember { mutableStateOf(false) }
             var connectionStatus by remember { mutableStateOf("Checking...") }
             var lastSyncTime by remember { mutableStateOf(0L) }
+            var totalScans by remember { mutableStateOf(0) }
+            var validScans by remember { mutableStateOf(0) }
 
             // Faculty state variables
             var userRole by remember { mutableStateOf("STUDENT") }
@@ -139,6 +141,15 @@ class MainActivity : FragmentActivity() {
                         startWiFiScanService()
                         PresenceSubmissionWorker.schedule(this@MainActivity)
                     }
+                }
+            }
+
+            LaunchedEffect(Unit) {
+                lifecycleScope.launch {
+                    prefs.totalScans.collect { totalScans = it }
+                }
+                lifecycleScope.launch {
+                    prefs.validScans.collect { validScans = it }
                 }
             }
 
@@ -317,6 +328,11 @@ class MainActivity : FragmentActivity() {
                         sessionId = sessionId,
                         scanning = scanning,
                         lastSyncTime = lastSyncTime,
+                        totalScans = totalScans,
+                        validScans = validScans,
+                        onResetScans = {
+                            lifecycleScope.launch { prefs.resetScanCounts() }
+                        },
                         connectionStatus = connectionStatus,
                         onToggleScanning = { start ->
                             if (start) {
