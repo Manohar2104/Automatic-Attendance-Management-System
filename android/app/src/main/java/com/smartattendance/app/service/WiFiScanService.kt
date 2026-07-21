@@ -150,22 +150,27 @@ class WiFiScanService : Service() {
             "SmartAttendance::WiFiScanWakeLock"
         )
         try {
-            // Acquire wake lock with a 5s timeout to avoid any chance of leaking the lock
-            wakeLock?.acquire(5000)
-            
-            wifiManager?.let { wm ->
-                val success = wm.startScan()
-                if (success) {
-                    val scanResults = wm.scanResults
-                    val strongest = scanResults.maxByOrNull { it.level }
-                    val bssids = scanResults.take(5).map { "${it.SSID}(${it.level}dBm)" }
+            wakeLock?.acquire(15000)
 
-                    onScanResult(bssids, strongest?.level ?: 0)
-                    uploadScanToFind3(scanResults)
+            // Execute 3 rapid scans in a burst at the start of every minute
+            repeat(3) { burstIndex ->
+                wifiManager?.let { wm ->
+                    val success = wm.startScan()
+                    if (success) {
+                        val scanResults = wm.scanResults
+                        val strongest = scanResults.maxByOrNull { it.level }
+                        val bssids = scanResults.take(5).map { "${it.SSID}(${it.level}dBm)" }
+
+                        onScanResult(bssids, strongest?.level ?: 0)
+                        uploadScanToFind3(scanResults)
+                    }
+                }
+                if (burstIndex < 2) {
+                    kotlinx.coroutines.delay(2000L) // 2s delay between rapid burst scans
                 }
             }
         } catch (e: Exception) {
-            // Scan failed, will retry on next interval
+            // Scan burst failed, will retry on next interval
         } finally {
             if (wakeLock?.isHeld == true) {
                 wakeLock.release()
@@ -198,9 +203,10 @@ class WiFiScanService : Service() {
         return NotificationCompat.Builder(this, SmartAttendanceApp.NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Attendance Scanning")
             .setContentText("Scanning for nearby WiFi networks...")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setSmallIcon(R.drawable.pes_logo)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
@@ -221,6 +227,6 @@ class WiFiScanService : Service() {
     companion object {
         const val SCAN_RESULT_ACTION = "com.smartattendance.SCAN_RESULT"
         const val NOTIFICATION_ID = 1001
-        private const val SCAN_INTERVAL_MS = 10_000L
+        private const val SCAN_INTERVAL_MS = 60_000L
     }
 }

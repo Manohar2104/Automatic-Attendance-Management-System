@@ -143,7 +143,7 @@ fun MainScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            if (scanning) "WiFi scanning every 10 seconds" else "Tap the switch to start scanning",
+                            if (scanning) "3 rapid scans at start of every minute" else "Tap the switch to start scanning",
                             style = MaterialTheme.typography.bodySmall,
                             color = if (scanning) Color.White.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
@@ -254,7 +254,7 @@ fun MainScreen(
                             Text("How it works", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = PesNavy)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "When you enable scanning, your device will automatically scan nearby WiFi networks every 10 seconds. The system determines your classroom location and records attendance silently in the background.",
+                                "When you enable scanning, your device will automatically scan nearby WiFi networks every 20 seconds (3 scans per minute). The system determines your classroom location and records attendance silently in the background.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFF37474F)
                             )

@@ -46,45 +46,16 @@ async def _auto_start_sessions(session: AsyncSession) -> None:
     sessions_to_start = result.scalars().all()
 
     for sess in sessions_to_start:
-        # 1. Check if teacher is in the corridor -- if so, DO NOT start session
-        in_corridor = await _is_faculty_in_corridor(session, sess.faculty_id)
-        if in_corridor:
-            logger.info(f"Teacher is currently in the corridor for session {sess.id} (Room {sess.location}). Session remains SCHEDULED.")
-            continue
-
-        # 2. Check if the specific assigned faculty is present in this exact room location
-        #    ONLY events with location matching the session's room count.
-        #    Events with location="unknown", "corridor", "hallway" are all ignored.
         is_faculty_present = await _is_faculty_present_in_location(
             session, sess.location, faculty_id=sess.faculty_id
         )
 
-        if not is_faculty_present:
-            # Grace period fallback: ONLY if FIND3 is completely offline
-            # (i.e., there are ZERO recent events from this faculty anywhere).
-            # If FIND3 IS sending events (even with location="unknown" or "corridor"),
-            # that means scanning is active and we should wait for the teacher to enter the room.
-            has_any_events = await _has_any_recent_faculty_event(
-                session, faculty_id=sess.faculty_id
-            )
-            if not has_any_events:
-                # FIND3 is truly offline — no events at all from this teacher
-                minutes_past_start = (now - sess.scheduled_start).total_seconds() / 60
-                if minutes_past_start >= 3:
-                    logger.info(
-                        f"Grace-period auto-starting session {sess.id} "
-                        f"({minutes_past_start:.1f}m past start, FIND3 appears offline — no faculty events found)"
-                    )
-                    is_faculty_present = True
-            else:
-                logger.info(
-                    f"Session {sess.id}: Scanning is active but teacher not in room {sess.location}. Staying SCHEDULED."
-                )
-
         if is_faculty_present:
-            logger.info(f"Auto-starting session {sess.id} (location: {sess.location})")
+            logger.info(f"Auto-starting session {sess.id} (location: {sess.location}) - Teacher confirmed in classroom.")
             sess.status = SessionStatus.ACTIVE
             sess.actual_start = now
+        else:
+            logger.info(f"Session {sess.id} (location: {sess.location}): Teacher not in classroom. Staying SCHEDULED.")
 
 
 async def _auto_end_sessions(session: AsyncSession) -> None:
@@ -143,13 +114,11 @@ async def _is_faculty_in_corridor(
 
 
 async def _is_faculty_present_in_location(
-    session: AsyncSession, location: str, faculty_id = None, minutes_ago: int = 3, min_scans: int = 2
+    session: AsyncSession, location: str, faculty_id = None, minutes_ago: int = 3
 ) -> bool:
     """
-    Check if the assigned faculty is CURRENTLY & STABLY present inside the classroom.
-    - Latest non-unknown location MUST be the assigned classroom.
-    - No corridor/hallway events must exist after the first classroom scan.
-    - Requires at least min_scans (default 2) inside the room spanning >= 10s apart.
+    Check if the assigned faculty is present inside the classroom.
+    Returns True IMMEDIATELY as soon as the latest known location is the assigned classroom.
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
 
@@ -163,53 +132,25 @@ async def _is_faculty_present_in_location(
             return False
         faculty_ids = [f.id for f in faculty_users]
 
-    # Fetch ALL recent non-unknown location events for faculty ordered by timestamp
+    # Fetch the single most recent presence event for the teacher (including corridor/unknown)
     stmt = (
         select(Event)
         .where(
             and_(
                 Event.user_id.in_(faculty_ids),
                 Event.type == EventType.ENTER,
-                Event.location != None,
-                Event.location != "unknown",
                 Event.timestamp >= cutoff_time,
             )
         )
-        .order_by(Event.timestamp.asc())
+        .order_by(Event.timestamp.desc())
+        .limit(1)
     )
     result = await session.execute(stmt)
-    all_events = result.scalars().all()
+    latest_event = result.scalars().first()
 
-    if not all_events:
-        return False
-
-    # 1. The LATEST non-unknown location MUST be the target classroom
-    latest_loc = all_events[-1].location
-    if latest_loc != location:
-        logger.debug(f"Faculty latest location is '{latest_loc}', not '{location}'. Skipping auto-start.")
-        return False
-
-    # 2. Filter for target classroom events
-    room_events = [e for e in all_events if e.location == location]
-    if len(room_events) < min_scans:
-        return False
-
-    # 3. Ensure no corridor/hallway events occurred AFTER the first room event
-    first_room_ts = room_events[0].timestamp
-    corridor_after = [
-        e for e in all_events
-        if e.timestamp >= first_room_ts and any(tag in e.location.lower() for tag in ("corridor", "hallway"))
-    ]
-    if corridor_after:
-        logger.info(f"Corridor event detected after room scan for session room {location}. Skipping auto-start.")
-        return False
-
-    # 4. Check that room events span at least 10 seconds apart
-    timestamps = [e.timestamp for e in room_events if e.timestamp]
-    if len(timestamps) >= 2:
-        time_span = (max(timestamps) - min(timestamps)).total_seconds()
-        if time_span >= 10:
-            return True
+    if latest_event and latest_event.location == location:
+        logger.info(f"Teacher explicitly confirmed in classroom '{location}' (latest scan). Auto-starting session.")
+        return True
 
     return False
 
