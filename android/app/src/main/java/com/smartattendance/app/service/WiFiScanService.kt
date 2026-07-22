@@ -31,6 +31,11 @@ class WiFiScanService : Service() {
     private var scanJob: Job? = null
     private var wifiManager: WifiManager? = null
 
+    private var bluetoothLeAdvertiser: android.bluetooth.le.BluetoothLeAdvertiser? = null
+    private var bluetoothLeScanner: android.bluetooth.le.BluetoothLeScanner? = null
+    private var isAdvertising = false
+    private val detectedBeacons = mutableMapOf<String, Int>()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -55,10 +60,129 @@ class WiFiScanService : Service() {
 
     private fun startScanning() {
         scanJob = scope.launch {
+            val prefs = PreferencesManager(applicationContext)
+            val role = prefs.userRole.first()
+            val userIdVal = prefs.userId.first()
+
+            if (role == "FACULTY" && userIdVal.isNotBlank()) {
+                startBleAdvertising(userIdVal)
+            }
+
             while (isActive) {
+                if (role == "STUDENT") {
+                    startBleScanning()
+                }
                 performScan()
                 delay(SCAN_INTERVAL_MS)
             }
+        }
+    }
+
+    private fun startBleAdvertising(userId: String) {
+        if (isAdvertising) return
+        try {
+            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return
+            if (!adapter.isEnabled) return
+            bluetoothLeAdvertiser = adapter.bluetoothLeAdvertiser ?: return
+
+            val settings = android.bluetooth.le.AdvertiseSettings.Builder()
+                .setAdvertiseMode(android.bluetooth.le.AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setTxPowerLevel(android.bluetooth.le.AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+                .setConnectable(false)
+                .build()
+
+            val uuid = java.util.UUID.fromString(userId)
+            val data = android.bluetooth.le.AdvertiseData.Builder()
+                .addServiceUuid(android.os.ParcelUuid(uuid))
+                .build()
+
+            bluetoothLeAdvertiser?.startAdvertising(settings, data, advertiseCallback)
+            isAdvertising = true
+            Log.d("WiFiScanService", "Started BLE advertising UUID: $userId")
+        } catch (e: Exception) {
+            Log.e("WiFiScanService", "Failed to start BLE advertising: ${e.message}")
+        }
+    }
+
+    private fun stopBleAdvertising() {
+        if (!isAdvertising) return
+        try {
+            bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
+            isAdvertising = false
+            Log.d("WiFiScanService", "Stopped BLE advertising")
+        } catch (e: Exception) {
+            Log.e("WiFiScanService", "Failed to stop BLE advertising: ${e.message}")
+        }
+    }
+
+    private val advertiseCallback = object : android.bluetooth.le.AdvertiseCallback() {
+        override fun onStartSuccess(settingsInEffect: android.bluetooth.le.AdvertiseSettings?) {
+            super.onStartSuccess(settingsInEffect)
+            Log.i("WiFiScanService", "BLE advertising started successfully")
+        }
+
+        override fun onStartFailure(errorCode: Int) {
+            super.onStartFailure(errorCode)
+            Log.e("WiFiScanService", "BLE advertising failed with code: $errorCode")
+            isAdvertising = false
+        }
+    }
+
+    private fun startBleScanning() {
+        try {
+            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return
+            if (!adapter.isEnabled) return
+            bluetoothLeScanner = adapter.bluetoothLeScanner ?: return
+
+            synchronized(detectedBeacons) {
+                detectedBeacons.clear()
+            }
+
+            val settings = android.bluetooth.le.ScanSettings.Builder()
+                .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+
+            bluetoothLeScanner?.startScan(null, settings, scanCallback)
+            Log.d("WiFiScanService", "Started BLE scan window...")
+
+            // Stop BLE scanning after 6 seconds to conserve battery
+            scope.launch {
+                delay(6000)
+                stopBleScanning()
+            }
+        } catch (e: Exception) {
+            Log.e("WiFiScanService", "Failed to start BLE scanning: ${e.message}")
+        }
+    }
+
+    private fun stopBleScanning() {
+        try {
+            bluetoothLeScanner?.stopScan(scanCallback)
+            Log.d("WiFiScanService", "Stopped BLE scan window")
+        } catch (e: Exception) {
+            Log.e("WiFiScanService", "Failed to stop BLE scanning: ${e.message}")
+        }
+    }
+
+    private val scanCallback = object : android.bluetooth.le.ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult?) {
+            super.onScanResult(callbackType, result)
+            result?.let { res ->
+                val uuids = res.scanRecord?.serviceUuids ?: return
+                val rssi = res.rssi
+                for (parcelUuid in uuids) {
+                    val uuidString = parcelUuid.uuid.toString()
+                    synchronized(detectedBeacons) {
+                        detectedBeacons[uuidString] = rssi
+                    }
+                    Log.d("WiFiScanService", "Detected BLE beacon: $uuidString | RSSI: $rssi")
+                }
+            }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            super.onScanFailed(errorCode)
+            Log.e("WiFiScanService", "BLE scan failed: $errorCode")
         }
     }
 
@@ -80,6 +204,14 @@ class WiFiScanService : Service() {
 
         val sensorsJson = JSONObject()
         sensorsJson.put("wifi", wifiJson)
+
+        val bluetoothJson = JSONObject()
+        synchronized(detectedBeacons) {
+            for ((uuid, rssi) in detectedBeacons) {
+                bluetoothJson.put(uuid, rssi)
+            }
+        }
+        sensorsJson.put("bluetooth", bluetoothJson)
 
         val payload = JSONObject()
         payload.put("d", deviceId)
@@ -159,9 +291,11 @@ class WiFiScanService : Service() {
                     if (success) {
                         val scanResults = wm.scanResults
                         val strongest = scanResults.maxByOrNull { it.level }
-                        val bssids = scanResults.take(5).map { "${it.SSID}(${it.level}dBm)" }
-
-                        onScanResult(bssids, strongest?.level ?: 0)
+                        val bssids = scanResults.take(15).map { "${it.SSID} [${it.BSSID}] (${it.level}dBm)" }
+                        val beaconsCopy = synchronized(detectedBeacons) {
+                            detectedBeacons.toMap()
+                        }
+                        onScanResult(bssids, strongest?.level ?: 0, beaconsCopy)
                         uploadScanToFind3(scanResults)
                     }
                 }
@@ -178,10 +312,12 @@ class WiFiScanService : Service() {
         }
     }
 
-    private fun onScanResult(bssids: List<String>, rssi: Int) {
+    private fun onScanResult(bssids: List<String>, rssi: Int, beacons: Map<String, Int>) {
         val intent = Intent(SCAN_RESULT_ACTION).apply {
             putExtra("bssids", bssids.toTypedArray())
             putExtra("rssi", rssi)
+            val bleArray = beacons.map { "${it.key} (${it.value}dBm)" }.toTypedArray()
+            putExtra("ble_beacons", bleArray)
             putExtra("timestamp", System.currentTimeMillis())
         }
         sendBroadcast(intent)

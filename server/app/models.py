@@ -106,3 +106,13 @@ class AttendanceOverride(Base):
     override_status = Column(Enum(AttendanceStatus, native_enum=False), nullable=False)
     justification = Column(String(1024), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class BluetoothProximity(Base):
+    __tablename__ = "bluetooth_proximity"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    faculty_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    session_id = Column(String(255), nullable=True)
+    rssi = Column(Float, nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())

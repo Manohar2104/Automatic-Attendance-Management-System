@@ -42,7 +42,9 @@ fun MainScreen(
     onToggleScanning: (Boolean) -> Unit,
     onServerUrlChange: (String) -> Unit,
     onSessionIdChange: (String) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    liveWifiScans: List<String> = emptyList(),
+    liveBleScans: List<String> = emptyList()
 ) {
     val isConnected = connectionStatus == "Connected"
     var showSettings by remember { mutableStateOf(false) }
@@ -198,6 +200,58 @@ fun MainScreen(
                     InfoRow(label = "Device ID", value = if (deviceId.isNotBlank()) deviceId.take(16) + "…" else "Not registered")
                     InfoRow(label = "Session", value = if (sessionId.isNotBlank()) sessionId.take(20) + "…" else "Auto-detected")
                     InfoRow(label = "Status", value = if (scanning) "Active" else "Inactive", valueColor = if (scanning) ScanGreen else MaterialTheme.colorScheme.error)
+                }
+            }
+
+            // --- Diagnostics & Live Scans Card ---
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Visibility, contentDescription = null, tint = PesNavy, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Diagnostics & Live Scans", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = PesNavy)
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Text("Latest WiFi Scans (Detected APs):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = PesNavy)
+                    if (liveWifiScans.isEmpty()) {
+                        Text("No Wi-Fi scans recorded yet. Start scanning to capture.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    } else {
+                        Column(
+                            modifier = Modifier.heightIn(max = 120.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            liveWifiScans.forEach { wifiAp ->
+                                Text(wifiAp, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+                    Text("Latest Bluetooth BLE Beacons:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = PesNavy)
+                    if (liveBleScans.isEmpty()) {
+                        Text("No BLE beacons detected. Ensure teacher phone is advertising nearby.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    } else {
+                        Column(
+                            modifier = Modifier.heightIn(max = 120.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            liveBleScans.forEach { bleBeacon ->
+                                Text(bleBeacon, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
                 }
             }
 

@@ -23,12 +23,13 @@ class PreferencesManager(private val context: Context) {
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val IS_SCANNING = booleanPreferencesKey("is_scanning")
         val USER_ROLE = stringPreferencesKey("user_role")
+        val USER_ID = stringPreferencesKey("user_id")
         val ACCESS_TOKEN = stringPreferencesKey("access_token")
         val LAST_LOCATION = stringPreferencesKey("last_location")
         val TOTAL_SCANS = androidx.datastore.preferences.core.intPreferencesKey("total_scans")
         val VALID_SCANS = androidx.datastore.preferences.core.intPreferencesKey("valid_scans")
 
-        const val DEFAULT_SERVER_URL = "http://xqxhoz-ip-157-50-190-150.tunnelmole.net"
+        const val DEFAULT_SERVER_URL = "http://4c7sg7-ip-152-57-143-232.tunnelmole.net"
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -57,6 +58,10 @@ class PreferencesManager(private val context: Context) {
 
     val userRole: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[USER_ROLE] ?: "STUDENT"
+    }
+
+    val userId: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[USER_ID] ?: ""
     }
 
     val accessToken: Flow<String> = context.dataStore.data.map { prefs ->
@@ -101,6 +106,10 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun saveUserRole(role: String) {
         context.dataStore.edit { it[USER_ROLE] = role }
+    }
+
+    suspend fun saveUserId(userId: String) {
+        context.dataStore.edit { it[USER_ID] = userId }
     }
 
     suspend fun saveAccessToken(token: String) {

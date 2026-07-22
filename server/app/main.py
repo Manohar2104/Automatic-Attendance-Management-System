@@ -13,7 +13,7 @@ from .auth import (
     create_refresh_token,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_
 import asyncio
 import datetime
 from .schemas import DeviceRegister, PresenceEvent, DeviceInfo
@@ -26,6 +26,7 @@ from .models import (
     AttendanceOverride,
     Session,
     SessionStatus,
+    BluetoothProximity,
 )
 import uuid
 import time
@@ -465,10 +466,49 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
     await db.commit()
     await db.refresh(ev)
 @app.post("/find3-data")
-async def proxy_find3_data(payload: dict):
+async def proxy_find3_data(payload: dict, db: AsyncSession = Depends(get_db)):
     """Proxy FIND3 sensor payloads from mobile devices directly to the FIND3 container."""
     import httpx
     device_id = payload.get("d") or payload.get("device") or "unknown_device"
+
+    # Extract Bluetooth BLE beacons if present in scan payload
+    sensors = payload.get("s", {})
+    bluetooth = sensors.get("bluetooth", {}) if isinstance(sensors, dict) else {}
+    if bluetooth:
+        from .models import DeviceBinding, BindingStatus, BluetoothProximity, User, RoleEnum
+        from sqlalchemy import and_
+        stmt = select(DeviceBinding).where(
+            and_(
+                DeviceBinding.device_fingerprint == device_id,
+                DeviceBinding.status == BindingStatus.ACTIVE
+            )
+        )
+        res_binding = await db.execute(stmt)
+        binding = res_binding.scalars().first()
+        if binding and binding.user_id:
+            student_id = binding.user_id
+            for raw_beacon_id, rssi in bluetooth.items():
+                try:
+                    beacon_uuid = uuid.UUID(raw_beacon_id)
+                    # Check if this beacon UUID corresponds to a registered Faculty member
+                    stmt_fac = select(User).where(and_(User.id == beacon_uuid, User.role == RoleEnum.FACULTY))
+                    res_fac = await db.execute(stmt_fac)
+                    faculty = res_fac.scalars().first()
+                    if faculty:
+                        log_prox = BluetoothProximity(
+                            student_id=student_id,
+                            faculty_id=faculty.id,
+                            rssi=float(rssi)
+                        )
+                        db.add(log_prox)
+                        logger.info(f"BLUETOOTH PROXIMITY: student={student_id} detected faculty={faculty.id} with RSSI={rssi}")
+                except Exception as ex:
+                    logger.debug(f"Invalid BLE beacon identifier or parse error: {ex}")
+            try:
+                await db.commit()
+            except Exception as commit_ex:
+                logger.error(f"Failed to commit Bluetooth proximity logs: {commit_ex}")
+
     async with httpx.AsyncClient() as client:
         try:
             res = await client.post("http://find3:8003/data", json=payload, timeout=5.0)
@@ -579,12 +619,28 @@ async def compute_attendance(
             bound_count += 1
         enter_count = sum(1 for e in evs if e.type == EventType.ENTER)
 
+        # Check Bluetooth proximity verification if professor was active
+        has_ble_verification = True
+        if faculty_scans_count > 0 and sess_obj and sess_obj.faculty_id:
+            start_time = start or sess_obj.scheduled_start
+            end_time = end or sess_obj.scheduled_end
+            stmt_prox = select(BluetoothProximity).where(
+                and_(
+                    BluetoothProximity.student_id == user_id,
+                    BluetoothProximity.faculty_id == sess_obj.faculty_id,
+                    BluetoothProximity.timestamp >= start_time,
+                    BluetoothProximity.timestamp <= end_time
+                )
+            ).limit(1)
+            res_prox = await db.execute(stmt_prox)
+            has_ble_verification = res_prox.scalars().first() is not None
+
         raw_score = (
             min(100, int((enter_count / baseline_scans) * 100)) if baseline_scans else 0
         )
         status_enum = (
             AttendanceStatus.PRESENT
-            if raw_score >= settings.present_threshold_percent
+            if (raw_score >= settings.present_threshold_percent and has_ble_verification)
             else AttendanceStatus.ABSENT
         )
 

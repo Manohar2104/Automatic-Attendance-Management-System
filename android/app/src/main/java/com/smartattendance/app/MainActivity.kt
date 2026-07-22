@@ -64,6 +64,34 @@ class MainActivity : FragmentActivity() {
             var totalScans by remember { mutableStateOf(0) }
             var validScans by remember { mutableStateOf(0) }
 
+            var liveWifiScans by remember { mutableStateOf<List<String>>(emptyList()) }
+            var liveBleScans by remember { mutableStateOf<List<String>>(emptyList()) }
+
+            val context = androidx.compose.ui.platform.LocalContext.current
+            DisposableEffect(scanning) {
+                val receiver = object : android.content.BroadcastReceiver() {
+                    override fun onReceive(c: android.content.Context?, intent: Intent?) {
+                        intent?.let {
+                            val wifi = it.getStringArrayExtra("bssids")?.toList() ?: emptyList()
+                            val ble = it.getStringArrayExtra("ble_beacons")?.toList() ?: emptyList()
+                            liveWifiScans = wifi
+                            liveBleScans = ble
+                        }
+                    }
+                }
+                val filter = android.content.IntentFilter(WiFiScanService.SCAN_RESULT_ACTION)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    context.registerReceiver(receiver, filter)
+                }
+                onDispose {
+                    try {
+                        context.unregisterReceiver(receiver)
+                    } catch (e: Exception) {}
+                }
+            }
+
             // Faculty state variables
             var userRole by remember { mutableStateOf("STUDENT") }
             var accessToken by remember { mutableStateOf("") }
@@ -171,6 +199,7 @@ class MainActivity : FragmentActivity() {
                                 userEmail = profile.email
                                 userRole = profile.role
                                 prefs.saveUserRole(profile.role)
+                                prefs.saveUserId(profile.id)
 
                                 if (profile.role == "FACULTY") {
                                     loadingSessions = true
@@ -245,6 +274,7 @@ class MainActivity : FragmentActivity() {
                                 prefs.saveDeviceId(hash)
                                 prefs.saveAccessToken(token)
                                 prefs.saveUserRole(profile.role)
+                                prefs.saveUserId(profile.id)
                                 prefs.setRegistered(true)
 
                                 deviceId = hash
@@ -367,7 +397,9 @@ class MainActivity : FragmentActivity() {
                                 WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
                             }
                         },
-                        onLogout = { handleLogout() }
+                        onLogout = { handleLogout() },
+                        liveWifiScans = liveWifiScans,
+                        liveBleScans = liveBleScans
                     )
                 }
             }
@@ -402,6 +434,11 @@ class MainActivity : FragmentActivity() {
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
         val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
