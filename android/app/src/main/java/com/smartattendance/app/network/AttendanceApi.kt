@@ -67,7 +67,11 @@ data class AttendanceResult(
     val score: Double,
     val status: String,
     val enter_count: Int,
-    val location_match: Boolean
+    val location_match: Boolean,
+    val wifi_scans: Int = 0,
+    val ble_scans: Int = 0,
+    val total_scans_required: Int = 1,
+    val ble_verified: Boolean = true
 )
 
 data class ComputeAttendanceResponse(

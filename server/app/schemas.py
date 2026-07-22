@@ -67,6 +67,10 @@ class AttendanceResult(BaseModel):
     status: str
     enter_count: int
     location_match: bool
+    wifi_scans: int = 0
+    ble_scans: int = 0
+    total_scans_required: int = 1
+    ble_verified: bool = True
 
 
 class ComputeAttendanceResponse(BaseModel):

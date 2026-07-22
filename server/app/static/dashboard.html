@@ -525,7 +525,8 @@
                         <thead>
                             <tr>
                                 <th>Student Email</th>
-                                <th>Checked Scans</th>
+                                <th>WiFi Scans</th>
+                                <th>Bluetooth BLE Scans</th>
                                 <th>Match Status</th>
                                 <th>Score</th>
                                 <th>Grade</th>
@@ -535,7 +536,7 @@
                         <tbody id="attendance-results-body">
                             <!-- Filled dynamically -->
                             <tr>
-                                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 4rem 0;">No session currently loaded.</td>
+                                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 4rem 0;">No session currently loaded.</td>
                             </tr>
                         </tbody>
                     </table>
@@ -838,7 +839,7 @@
                     if (data.results.length === 0) {
                         tableBody.innerHTML = `
                             <tr>
-                                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 3rem 0;">
+                                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 3rem 0;">
                                     No presence logs matched the room fingerprint for this session.
                                 </td>
                             </tr>
@@ -846,12 +847,6 @@
                         return;
                     }
 
-                    // For each result, get the user email
-                    // Since backend returns user_id, we fetch user profile or retrieve emails
-                    // To keep things simple, we fetch a list of sessions/users or run a query
-                    // Let's resolve the user_id to student email if possible, or just display the id/email
-                    // The backend returned results has user_id, score, status, etc.
-                    // We can map mock names or request user profiles, let's render the rows.
                     data.results.forEach(r => {
                         const row = document.createElement('tr');
                         let statusClass = 'status-absent';
@@ -859,10 +854,23 @@
                         if (r.status === 'PARTIAL') statusClass = 'status-partial';
 
                         let studentEmail = r.email || r.user_id;
+                        const totalReq = r.total_scans_required || 1;
+                        const wifiCount = r.wifi_scans !== undefined ? r.wifi_scans : r.enter_count;
+                        const bleCount = r.ble_scans !== undefined ? r.ble_scans : 0;
+
+                        const wifiRatioText = `${wifiCount} / ${totalReq} valid`;
+                        const bleRatioText = `${bleCount} / ${totalReq} scans`;
+                        const bleStatusIcon = r.ble_verified ? '✓ Verified' : '✗ Unverified';
+                        const bleColor = r.ble_verified ? 'var(--color-success)' : 'var(--color-error)';
 
                         row.innerHTML = `
                             <td style="font-weight: 500; color: white;">${studentEmail}</td>
-                            <td>${r.enter_count} scans</td>
+                            <td>
+                                <div style="font-weight: 600; color: #93c5fd;">${wifiRatioText}</div>
+                            </td>
+                            <td>
+                                <div style="font-weight: 600; color: ${bleColor};">${bleRatioText} <span style="font-size: 0.8rem; opacity: 0.9;">(${bleStatusIcon})</span></div>
+                            </td>
                             <td><span style="color: ${r.location_match ? 'var(--color-success)' : 'var(--color-error)'}">${r.location_match ? 'Validated' : 'Wrong Room'}</span></td>
                             <td>${r.score.toFixed(1)}%</td>
                             <td><span class="${statusClass}">${r.status}</span></td>

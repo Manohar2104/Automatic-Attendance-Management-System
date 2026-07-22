@@ -399,7 +399,9 @@ private fun FacultyStudentRow(result: AttendanceResult, onEditClick: () -> Unit)
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text(rollNo ?: result.email, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${result.enter_count} scans · ${result.score.toInt()}%", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val wifiText = "WiFi: ${result.wifi_scans}/${result.total_scans_required}"
+                    val bleText = "BLE: ${result.ble_scans}/${result.total_scans_required}"
+                    Text("$wifiText · $bleText · ${result.score.toInt()}%", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.width(8.dp))

@@ -13,7 +13,7 @@ from .auth import (
     create_refresh_token,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, func, cast, String
 import asyncio
 import datetime
 from .schemas import DeviceRegister, PresenceEvent, DeviceInfo
@@ -27,6 +27,8 @@ from .models import (
     Session,
     SessionStatus,
     BluetoothProximity,
+    RoleEnum,
+    User,
 )
 import uuid
 import time
@@ -475,7 +477,7 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
         db.add(binding)
     await db.commit()
     await db.refresh(ev)
-    return {"status": "ok"}
+    return {"id": str(ev.id), "status": "ok"}
 
 
 def _ensure_utc(dt):
@@ -585,7 +587,11 @@ async def compute_attendance(
     """
     from .schemas import ComputeAttendanceResponse, AttendanceResult
 
-    sess_q = await db.execute(select(Session).where(Session.id == session_id))
+    try:
+        session_uuid = uuid.UUID(session_id)
+        sess_q = await db.execute(select(Session).where(Session.id == session_uuid))
+    except (ValueError, TypeError):
+        sess_q = await db.execute(select(Session).where(cast(Session.id, String) == str(session_id)))
     sess_obj = sess_q.scalars().first()
 
     # Auto-populate location_filter from the session's assigned room if not provided
@@ -651,16 +657,52 @@ async def compute_attendance(
     # Compute for union of user_events and existing_attendances to preserve overrides/history
     all_student_ids = set(user_events.keys()).union(existing_attendances.keys())
 
-    # Filter out the faculty_id from the student list
-    faculty_scans_count = 0
+    # Filter out all faculty users from the student list
+    fac_q = await db.execute(select(User).where(User.role == RoleEnum.FACULTY))
+    all_faculty_ids = set(u.id for u in fac_q.scalars().all())
     if sess_obj and sess_obj.faculty_id:
-        faculty_evs = user_events.get(sess_obj.faculty_id, [])
-        faculty_scans_count = sum(1 for e in faculty_evs if e.type == EventType.ENTER)
-        if sess_obj.faculty_id in all_student_ids:
-            all_student_ids.remove(sess_obj.faculty_id)
+        all_faculty_ids.add(sess_obj.faculty_id)
 
-    # Use professor's valid scans as baseline. Fall back to expected max_possible if 0.
-    baseline_scans = faculty_scans_count if faculty_scans_count > 0 else (max_possible or 1)
+    faculty_scans_count = 0
+    for fid in all_faculty_ids:
+        if fid in all_student_ids:
+            all_student_ids.remove(fid)
+        fevs = user_events.get(fid, [])
+        f_count = sum(1 for e in fevs if e.type == EventType.ENTER)
+        if f_count > faculty_scans_count:
+            faculty_scans_count = f_count
+
+    max_student_scans = max(
+        (sum(1 for e in user_events.get(uid, []) if e.type == EventType.ENTER) for uid in all_student_ids),
+        default=0
+    )
+
+    baseline_scans = max(faculty_scans_count, max_student_scans, max_possible, 1)
+
+    # Check if any BLE proximity records exist for this session
+    start_time = _ensure_utc(start or (sess_obj.scheduled_start if sess_obj else None))
+    end_time = _ensure_utc(end or (sess_obj.scheduled_end if sess_obj else None))
+
+    session_ble_conditions = []
+    if sess_obj and sess_obj.faculty_id:
+        session_ble_conditions.append(BluetoothProximity.faculty_id == sess_obj.faculty_id)
+
+    if start_time and end_time:
+        session_ble_conditions.append(
+            or_(
+                BluetoothProximity.session_id == str(session_id),
+                and_(
+                    BluetoothProximity.timestamp >= start_time,
+                    BluetoothProximity.timestamp <= end_time,
+                )
+            )
+        )
+    else:
+        session_ble_conditions.append(BluetoothProximity.session_id == str(session_id))
+
+    stmt_any_ble = select(func.count(BluetoothProximity.id)).where(and_(*session_ble_conditions))
+    res_any_ble = await db.execute(stmt_any_ble)
+    session_has_ble_data = (res_any_ble.scalar() or 0) > 0
 
     results = []
     bound_count = 0
@@ -670,41 +712,32 @@ async def compute_attendance(
             bound_count += 1
         enter_count = sum(1 for e in evs if e.type == EventType.ENTER)
 
-        # Check Bluetooth proximity verification if professor was active
-        has_ble_verification = True
-        if faculty_scans_count > 0 and sess_obj and sess_obj.faculty_id:
-            # Bug Fix #2 & #3: Prefer session_id-based lookup (reliable); fall back to
-            # UTC-normalised timestamp range only if session_id is unavailable.
-            prox_filters = [
-                BluetoothProximity.student_id == user_id,
-                BluetoothProximity.faculty_id == sess_obj.faculty_id,
-            ]
-            # Prefer session_id match (most reliable)
-            prox_filters_with_session = prox_filters + [
-                BluetoothProximity.session_id == str(session_id)
-            ]
-            stmt_prox = select(BluetoothProximity).where(
-                and_(*prox_filters_with_session)
-            ).limit(1)
-            res_prox = await db.execute(stmt_prox)
-            prox_row = res_prox.scalars().first()
+        # Query total Bluetooth BLE proximity scans for this student
+        ble_count_conditions = [BluetoothProximity.student_id == user_id]
+        if sess_obj and sess_obj.faculty_id:
+            ble_count_conditions.append(BluetoothProximity.faculty_id == sess_obj.faculty_id)
 
-            if prox_row is None:
-                # Fallback: timestamp range with Bug Fix #2 (ensure UTC-aware comparison)
-                start_time = _ensure_utc(start or sess_obj.scheduled_start)
-                end_time   = _ensure_utc(end   or sess_obj.scheduled_end)
-                stmt_prox_ts = select(BluetoothProximity).where(
+        if start_time and end_time:
+            ble_count_conditions.append(
+                or_(
+                    BluetoothProximity.session_id == str(session_id),
                     and_(
-                        BluetoothProximity.student_id == user_id,
-                        BluetoothProximity.faculty_id == sess_obj.faculty_id,
                         BluetoothProximity.timestamp >= start_time,
                         BluetoothProximity.timestamp <= end_time,
                     )
-                ).limit(1)
-                res_prox_ts = await db.execute(stmt_prox_ts)
-                prox_row = res_prox_ts.scalars().first()
+                )
+            )
+        else:
+            ble_count_conditions.append(BluetoothProximity.session_id == str(session_id))
 
-            has_ble_verification = prox_row is not None
+        stmt_ble_count = select(func.count(BluetoothProximity.id)).where(and_(*ble_count_conditions))
+        res_ble_count = await db.execute(stmt_ble_count)
+        ble_scans_count = res_ble_count.scalar() or 0
+
+        # Check Bluetooth proximity verification if professor was active AND session has BLE data
+        has_ble_verification = True
+        if faculty_scans_count > 0 and sess_obj and sess_obj.faculty_id and session_has_ble_data:
+            has_ble_verification = ble_scans_count > 0
             if not has_ble_verification:
                 logger.info(
                     f"BLE check FAILED for student={user_id} in session={session_id} "
@@ -714,11 +747,12 @@ async def compute_attendance(
         raw_score = (
             min(100, int((enter_count / baseline_scans) * 100)) if baseline_scans else 0
         )
-        status_enum = (
-            AttendanceStatus.PRESENT
-            if (raw_score >= settings.present_threshold_percent and has_ble_verification)
-            else AttendanceStatus.ABSENT
-        )
+        if raw_score >= settings.present_threshold_percent and has_ble_verification:
+            status_enum = AttendanceStatus.PRESENT
+        elif raw_score >= settings.partial_threshold_percent and has_ble_verification:
+            status_enum = AttendanceStatus.PARTIAL
+        else:
+            status_enum = AttendanceStatus.ABSENT
 
         attendance = existing_attendances.get(user_id)
         override = overrides.get(user_id)
@@ -758,6 +792,10 @@ async def compute_attendance(
                 status=final_status.value,
                 enter_count=enter_count,
                 location_match=location_match,
+                wifi_scans=enter_count,
+                ble_scans=ble_scans_count,
+                total_scans_required=baseline_scans,
+                ble_verified=has_ble_verification,
             )
         )
 

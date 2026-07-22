@@ -64,7 +64,7 @@ class Find3Subscriber:
         timestamp_ms = sensors.get("t")
         location = sensors.get("l")
         top_loc = guesses[0].get("location") if guesses else "None"
-        top_prob = guesses[0].get("probability", 0.0) if guesses else 0.0
+        top_prob = guesses[0].get("probability", 1.0) if guesses else 0.0
 
         if not location and guesses:
             if top_prob >= 0.70:
