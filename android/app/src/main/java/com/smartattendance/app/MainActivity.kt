@@ -68,12 +68,13 @@ class MainActivity : FragmentActivity() {
             var liveBleScans by remember { mutableStateOf<List<String>>(emptyList()) }
 
             val context = androidx.compose.ui.platform.LocalContext.current
-            DisposableEffect(scanning) {
+            DisposableEffect(Unit) {
                 val receiver = object : android.content.BroadcastReceiver() {
                     override fun onReceive(c: android.content.Context?, intent: Intent?) {
                         intent?.let {
                             val wifi = it.getStringArrayExtra("bssids")?.toList() ?: emptyList()
                             val ble = it.getStringArrayExtra("ble_beacons")?.toList() ?: emptyList()
+                            Log.d("MainActivity", "Broadcast received: wifi=${wifi.size}, ble=${ble.size}")
                             liveWifiScans = wifi
                             liveBleScans = ble
                         }

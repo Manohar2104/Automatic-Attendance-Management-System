@@ -287,17 +287,15 @@ class WiFiScanService : Service() {
             // Execute 3 rapid scans in a burst at the start of every minute
             repeat(3) { burstIndex ->
                 wifiManager?.let { wm ->
-                    val success = wm.startScan()
-                    if (success) {
-                        val scanResults = wm.scanResults
-                        val strongest = scanResults.maxByOrNull { it.level }
-                        val bssids = scanResults.take(15).map { "${it.SSID} [${it.BSSID}] (${it.level}dBm)" }
-                        val beaconsCopy = synchronized(detectedBeacons) {
-                            detectedBeacons.toMap()
-                        }
-                        onScanResult(bssids, strongest?.level ?: 0, beaconsCopy)
-                        uploadScanToFind3(scanResults)
+                    wm.startScan() // Trigger scan asynchronously (might be throttled)
+                    val scanResults = wm.scanResults
+                    val strongest = scanResults.maxByOrNull { it.level }
+                    val bssids = scanResults.take(15).map { "${it.SSID} [${it.BSSID}] (${it.level}dBm)" }
+                    val beaconsCopy = synchronized(detectedBeacons) {
+                        detectedBeacons.toMap()
                     }
+                    onScanResult(bssids, strongest?.level ?: 0, beaconsCopy)
+                    uploadScanToFind3(scanResults)
                 }
                 if (burstIndex < 2) {
                     kotlinx.coroutines.delay(2000L) // 2s delay between rapid burst scans
@@ -313,7 +311,9 @@ class WiFiScanService : Service() {
     }
 
     private fun onScanResult(bssids: List<String>, rssi: Int, beacons: Map<String, Int>) {
+        Log.d("WiFiScanService", "onScanResult: sending broadcast. wifi=${bssids.size}, ble=${beacons.size}")
         val intent = Intent(SCAN_RESULT_ACTION).apply {
+            setPackage(packageName)
             putExtra("bssids", bssids.toTypedArray())
             putExtra("rssi", rssi)
             val bleArray = beacons.map { "${it.key} (${it.value}dBm)" }.toTypedArray()

@@ -9,6 +9,8 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -109,7 +111,7 @@ fun FacultyScreen(
                 navigationIcon = {
                     if (selectedSessionId != null) {
                         IconButton(onClick = onRefreshSessions) {
-                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
                 },
@@ -141,7 +143,7 @@ fun FacultyScreen(
                         }
                     }
                     IconButton(onClick = onLogout) {
-                        Icon(Icons.Filled.Logout, contentDescription = "Logout", tint = MaterialTheme.colorScheme.error)
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Logout", tint = MaterialTheme.colorScheme.error)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -357,7 +359,7 @@ private fun FacStatCard(label: String, count: Int, total: Int, color: Color, mod
         border = BorderStroke(1.dp, color.copy(alpha = 0.2f))
     ) {
         Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("$count", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = color)
+            Text("$count/$total", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color)
             Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(alpha = 0.8f))
         }
     }
