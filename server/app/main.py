@@ -264,6 +264,16 @@ async def get_current_user_profile(current_user=Depends(require_current_user)):
     }
 
 
+@app.get("/users/me/ble-beacon-id")
+async def get_ble_beacon_id(current_user=Depends(require_current_user)):
+    """
+    Returns the BLE beacon identifier the faculty member's phone should broadcast.
+    The mobile app reads this value and uses it as the BLE advertisement UUID so
+    that student devices can detect and record faculty proximity.
+    """
+    return {"beacon_id": str(current_user.id)}
+
+
 @app.post("/refresh", response_model=Token)
 async def refresh(
     authorization: str = Header(None), db: AsyncSession = Depends(get_db)
@@ -465,6 +475,18 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
         db.add(binding)
     await db.commit()
     await db.refresh(ev)
+    return {"status": "ok"}
+
+
+def _ensure_utc(dt):
+    """Ensure a datetime is timezone-aware (UTC). Naive datetimes are assumed to be UTC."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
 @app.post("/find3-data")
 async def proxy_find3_data(payload: dict, db: AsyncSession = Depends(get_db)):
     """Proxy FIND3 sensor payloads from mobile devices directly to the FIND3 container."""
@@ -477,9 +499,14 @@ async def proxy_find3_data(payload: dict, db: AsyncSession = Depends(get_db)):
     if bluetooth:
         from .models import DeviceBinding, BindingStatus, BluetoothProximity, User, RoleEnum
         from sqlalchemy import and_
+
+        # Bug Fix #5: Strip family prefix (e.g. "home:android:abcd" → "android:abcd")
+        # FIND3 prepends a family name that is NOT part of the registered fingerprint.
+        raw_device_id = device_id.split(":", 1)[1] if ":" in device_id else device_id
+
         stmt = select(DeviceBinding).where(
             and_(
-                DeviceBinding.device_fingerprint == device_id,
+                DeviceBinding.device_fingerprint.in_([device_id, raw_device_id]),
                 DeviceBinding.status == BindingStatus.ACTIVE
             )
         )
@@ -487,10 +514,25 @@ async def proxy_find3_data(payload: dict, db: AsyncSession = Depends(get_db)):
         binding = res_binding.scalars().first()
         if binding and binding.user_id:
             student_id = binding.user_id
+
+            # Bug Fix #3: Resolve the active session for this student's location so we
+            # can tag the BluetoothProximity row with a session_id.
+            active_session_id = None
+            family = sensors.get("f") or (device_id.split(":", 1)[0] if ":" in device_id else None)
+            # Try to find any active session (we'll use it for all BLE rows in this scan)
+            sess_q = await db.execute(
+                select(Session).where(Session.status == SessionStatus.ACTIVE).limit(1)
+            )
+            active_sess = sess_q.scalars().first()
+            if active_sess:
+                active_session_id = str(active_sess.id)
+
             for raw_beacon_id, rssi in bluetooth.items():
                 try:
                     beacon_uuid = uuid.UUID(raw_beacon_id)
                     # Check if this beacon UUID corresponds to a registered Faculty member
+                    # Bug Fix #1: Faculty broadcasts their User.id UUID as the BLE beacon identifier.
+                    # The faculty app reads this from GET /users/me/ble-beacon-id.
                     stmt_fac = select(User).where(and_(User.id == beacon_uuid, User.role == RoleEnum.FACULTY))
                     res_fac = await db.execute(stmt_fac)
                     faculty = res_fac.scalars().first()
@@ -498,16 +540,25 @@ async def proxy_find3_data(payload: dict, db: AsyncSession = Depends(get_db)):
                         log_prox = BluetoothProximity(
                             student_id=student_id,
                             faculty_id=faculty.id,
-                            rssi=float(rssi)
+                            rssi=float(rssi),
+                            session_id=active_session_id,  # Bug Fix #4: always populate session_id
                         )
                         db.add(log_prox)
-                        logger.info(f"BLUETOOTH PROXIMITY: student={student_id} detected faculty={faculty.id} with RSSI={rssi}")
+                        logger.info(
+                            f"BLUETOOTH PROXIMITY: student={student_id} detected "
+                            f"faculty={faculty.id} RSSI={rssi} session={active_session_id}"
+                        )
                 except Exception as ex:
                     logger.debug(f"Invalid BLE beacon identifier or parse error: {ex}")
             try:
                 await db.commit()
             except Exception as commit_ex:
                 logger.error(f"Failed to commit Bluetooth proximity logs: {commit_ex}")
+        else:
+            logger.warning(
+                f"BLE scan received but no active binding found for device '{device_id}' "
+                f"(tried raw='{raw_device_id}'). No proximity recorded."
+            )
 
     async with httpx.AsyncClient() as client:
         try:
@@ -622,18 +673,43 @@ async def compute_attendance(
         # Check Bluetooth proximity verification if professor was active
         has_ble_verification = True
         if faculty_scans_count > 0 and sess_obj and sess_obj.faculty_id:
-            start_time = start or sess_obj.scheduled_start
-            end_time = end or sess_obj.scheduled_end
+            # Bug Fix #2 & #3: Prefer session_id-based lookup (reliable); fall back to
+            # UTC-normalised timestamp range only if session_id is unavailable.
+            prox_filters = [
+                BluetoothProximity.student_id == user_id,
+                BluetoothProximity.faculty_id == sess_obj.faculty_id,
+            ]
+            # Prefer session_id match (most reliable)
+            prox_filters_with_session = prox_filters + [
+                BluetoothProximity.session_id == str(session_id)
+            ]
             stmt_prox = select(BluetoothProximity).where(
-                and_(
-                    BluetoothProximity.student_id == user_id,
-                    BluetoothProximity.faculty_id == sess_obj.faculty_id,
-                    BluetoothProximity.timestamp >= start_time,
-                    BluetoothProximity.timestamp <= end_time
-                )
+                and_(*prox_filters_with_session)
             ).limit(1)
             res_prox = await db.execute(stmt_prox)
-            has_ble_verification = res_prox.scalars().first() is not None
+            prox_row = res_prox.scalars().first()
+
+            if prox_row is None:
+                # Fallback: timestamp range with Bug Fix #2 (ensure UTC-aware comparison)
+                start_time = _ensure_utc(start or sess_obj.scheduled_start)
+                end_time   = _ensure_utc(end   or sess_obj.scheduled_end)
+                stmt_prox_ts = select(BluetoothProximity).where(
+                    and_(
+                        BluetoothProximity.student_id == user_id,
+                        BluetoothProximity.faculty_id == sess_obj.faculty_id,
+                        BluetoothProximity.timestamp >= start_time,
+                        BluetoothProximity.timestamp <= end_time,
+                    )
+                ).limit(1)
+                res_prox_ts = await db.execute(stmt_prox_ts)
+                prox_row = res_prox_ts.scalars().first()
+
+            has_ble_verification = prox_row is not None
+            if not has_ble_verification:
+                logger.info(
+                    f"BLE check FAILED for student={user_id} in session={session_id} "
+                    f"(faculty={sess_obj.faculty_id}): no proximity record found"
+                )
 
         raw_score = (
             min(100, int((enter_count / baseline_scans) * 100)) if baseline_scans else 0
