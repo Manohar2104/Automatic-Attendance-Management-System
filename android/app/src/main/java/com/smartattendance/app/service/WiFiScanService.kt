@@ -61,14 +61,14 @@ class WiFiScanService : Service() {
     private fun startScanning() {
         scanJob = scope.launch {
             val prefs = PreferencesManager(applicationContext)
-            val role = prefs.userRole.first()
-            val userIdVal = prefs.userId.first()
-
-            if (role == "FACULTY" && userIdVal.isNotBlank()) {
-                startBleAdvertising(userIdVal)
-            }
 
             while (isActive) {
+                val role = prefs.userRole.first()
+                val userIdVal = prefs.userId.first()
+
+                if (role == "FACULTY" && userIdVal.isNotBlank() && !isAdvertising) {
+                    startBleAdvertising(userIdVal)
+                }
                 if (role == "STUDENT") {
                     startBleScanning()
                 }
@@ -82,25 +82,35 @@ class WiFiScanService : Service() {
         if (isAdvertising) return
         try {
             val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return
-            if (!adapter.isEnabled) return
+            if (!adapter.isEnabled) {
+                Log.w("WiFiScanService", "Bluetooth is disabled on device. Cannot start BLE advertising.")
+                return
+            }
             bluetoothLeAdvertiser = adapter.bluetoothLeAdvertiser ?: return
 
             val settings = android.bluetooth.le.AdvertiseSettings.Builder()
                 .setAdvertiseMode(android.bluetooth.le.AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                 .setTxPowerLevel(android.bluetooth.le.AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
                 .setConnectable(false)
+                .setTimeout(0)
                 .build()
 
-            val uuid = java.util.UUID.fromString(userId)
+            val uuid = try {
+                java.util.UUID.fromString(userId)
+            } catch (_: Exception) {
+                java.util.UUID.nameUUIDFromBytes(userId.toByteArray())
+            }
+
             val data = android.bluetooth.le.AdvertiseData.Builder()
                 .addServiceUuid(android.os.ParcelUuid(uuid))
                 .build()
 
             bluetoothLeAdvertiser?.startAdvertising(settings, data, advertiseCallback)
             isAdvertising = true
-            Log.d("WiFiScanService", "Started BLE advertising UUID: $userId")
+            Log.d("WiFiScanService", "Started BLE advertising UUID: $uuid (raw user_id: $userId)")
         } catch (e: Exception) {
             Log.e("WiFiScanService", "Failed to start BLE advertising: ${e.message}")
+            isAdvertising = false
         }
     }
 
@@ -188,18 +198,18 @@ class WiFiScanService : Service() {
 
     private val httpClient = OkHttpClient()
 
-    private suspend fun uploadScanToFind3(scanResults: List<android.net.wifi.ScanResult>) {
+    private suspend fun uploadScanToFind3(mergedWifi: Map<String, Int>): Boolean {
         val prefs = PreferencesManager(applicationContext)
         val deviceId = prefs.deviceId.first()
         val serverUrl = prefs.serverUrl.first()
         
-        if (deviceId.isBlank() || serverUrl.isBlank()) return
+        if (deviceId.isBlank() || serverUrl.isBlank()) return false
 
-        val find3Url = if (serverUrl.endsWith("/")) "${serverUrl}find3-data" else "$serverUrl/find3-data"
+        val find3Url = if (serverUrl.endsWith("/")) "${serverUrl}find3-data" else "${serverUrl}/find3-data"
 
         val wifiJson = JSONObject()
-        for (res in scanResults) {
-            wifiJson.put(res.BSSID, res.level)
+        for ((bssid, level) in mergedWifi) {
+            wifiJson.put(bssid, level)
         }
 
         val sensorsJson = JSONObject()
@@ -226,6 +236,7 @@ class WiFiScanService : Service() {
             .post(requestBody)
             .build()
 
+        var isValidLocation = false
         try {
             withContext(Dispatchers.IO) {
                 httpClient.newCall(request).execute().use { response ->
@@ -234,37 +245,31 @@ class WiFiScanService : Service() {
                     } else {
                         val body = response.body?.string() ?: ""
                         Log.d("WiFiScanService", "Find3 upload success: $body")
-                        // Try to parse the guessed location from find3 response
-                        // find3 returns: {"guesses":[{"location":"301","probability":0.9}],...}
                         try {
                             val json = JSONObject(body)
                             val guesses = json.optJSONArray("guesses")
                             if (guesses != null && guesses.length() > 0) {
                                 val bestGuess = guesses.getJSONObject(0)
                                 val prob = bestGuess.optDouble("probability", 0.0)
-                                if (prob >= 0.70) {
+                                if (prob >= 0.40) {
                                     val detectedLocation = bestGuess.optString("location", "")
                                     val isCorridor = detectedLocation.lowercase().contains("corridor") || detectedLocation.lowercase().contains("hallway")
                                     if (detectedLocation.isNotBlank() && !isCorridor) {
                                         prefs.saveLastLocation(detectedLocation)
-                                        prefs.recordScanResult(true)
+                                        isValidLocation = true
                                         Log.d("WiFiScanService", "Location detected: $detectedLocation")
                                     } else {
                                         prefs.saveLastLocation(detectedLocation)
-                                        prefs.recordScanResult(false)
                                         Log.d("WiFiScanService", "Find3 returned corridor/empty location")
                                     }
                                 } else {
                                     prefs.saveLastLocation("unknown")
-                                    prefs.recordScanResult(false)
-                                    Log.d("WiFiScanService", "Discarded low-confidence location guess (probability $prob < 0.70)")
+                                    Log.d("WiFiScanService", "Discarded low-confidence location guess (probability $prob < 0.40)")
                                 }
                             } else {
-                                prefs.recordScanResult(false)
                                 Log.d("WiFiScanService", "No guesses in find3 response yet")
                             }
                         } catch (parseEx: Exception) {
-                            prefs.recordScanResult(false)
                             Log.w("WiFiScanService", "Could not parse find3 location: ${parseEx.message}")
                         }
                     }
@@ -273,6 +278,7 @@ class WiFiScanService : Service() {
         } catch (e: Exception) {
             Log.e("WiFiScanService", "Find3 upload error: ${e.message}")
         }
+        return isValidLocation
     }
 
     private suspend fun performScan() {
@@ -284,23 +290,38 @@ class WiFiScanService : Service() {
         try {
             wakeLock?.acquire(15000)
 
-            // Execute 3 rapid scans in a burst at the start of every minute
+            val mergedWifi = mutableMapOf<String, Int>()
+
+            // Execute 3 rapid local scans in a burst at the start of every minute
             repeat(3) { burstIndex ->
                 wifiManager?.let { wm ->
-                    wm.startScan() // Trigger scan asynchronously (might be throttled)
+                    wm.startScan() // Trigger scan asynchronously
                     val scanResults = wm.scanResults
+                    for (res in scanResults) {
+                        val currentMax = mergedWifi[res.BSSID]
+                        if (currentMax == null || res.level > currentMax) {
+                            mergedWifi[res.BSSID] = res.level
+                        }
+                    }
                     val strongest = scanResults.maxByOrNull { it.level }
                     val bssids = scanResults.take(15).map { "${it.SSID} [${it.BSSID}] (${it.level}dBm)" }
                     val beaconsCopy = synchronized(detectedBeacons) {
                         detectedBeacons.toMap()
                     }
                     onScanResult(bssids, strongest?.level ?: 0, beaconsCopy)
-                    uploadScanToFind3(scanResults)
                 }
                 if (burstIndex < 2) {
                     kotlinx.coroutines.delay(2000L) // 2s delay between rapid burst scans
                 }
             }
+
+            // Perform EXACTLY 1 upload per minute cycle containing the merged, high-quality Wi-Fi data
+            if (mergedWifi.isNotEmpty()) {
+                val isScanValid = uploadScanToFind3(mergedWifi)
+                val prefs = PreferencesManager(applicationContext)
+                prefs.recordScanResult(isScanValid)
+            }
+
         } catch (e: Exception) {
             // Scan burst failed, will retry on next interval
         } finally {

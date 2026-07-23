@@ -26,6 +26,9 @@ import com.smartattendance.app.R
 import com.smartattendance.app.network.AttendanceResult
 import com.smartattendance.app.network.SessionInfo
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+
 private val FacNavy = Color(0xFF1A237E)
 private val FacGold = Color(0xFFC9A84C)
 
@@ -46,6 +49,22 @@ fun FacultyScreen(
     var activeOverrideStudent by remember { mutableStateOf<AttendanceResult?>(null) }
     var selectedStatus by remember { mutableStateOf("PRESENT") }
     var justification by remember { mutableStateOf("") }
+
+    // Auto-refresh live attendance every 5 seconds when viewing a session
+    LaunchedEffect(selectedSessionId) {
+        if (selectedSessionId != null) {
+            while (isActive) {
+                val sessionObj = sessions.find { it.id == selectedSessionId }
+                onSelectSession(selectedSessionId, sessionObj?.location ?: "")
+                delay(5000L)
+            }
+        } else {
+            while (isActive) {
+                onRefreshSessions()
+                delay(10000L)
+            }
+        }
+    }
 
     // Override Dialog
     if (activeOverrideStudent != null) {
@@ -137,10 +156,15 @@ fun FacultyScreen(
                     }
                 },
                 actions = {
-                    if (selectedSessionId == null) {
-                        IconButton(onClick = onRefreshSessions) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    IconButton(onClick = {
+                        if (selectedSessionId != null) {
+                            val sessionObj = sessions.find { it.id == selectedSessionId }
+                            onSelectSession(selectedSessionId, sessionObj?.location ?: "")
+                        } else {
+                            onRefreshSessions()
                         }
+                    }) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
                     IconButton(onClick = onLogout) {
                         Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Logout", tint = MaterialTheme.colorScheme.error)

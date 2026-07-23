@@ -19,6 +19,7 @@ import datetime
 from .schemas import DeviceRegister, PresenceEvent, DeviceInfo
 from .models import (
     DeviceBinding,
+    BindingStatus,
     Event,
     EventType,
     Attendance,
@@ -454,15 +455,28 @@ async def revoke_device(
 @app.post("/presence")
 async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_db)):
     # Record an incoming presence event from a device
-    # Resolve user from device_fingerprint
+    raw_id = payload.device_fingerprint.split(":", 1)[1] if ":" in payload.device_fingerprint else payload.device_fingerprint
     q = await db.execute(
         select(DeviceBinding).where(
-            DeviceBinding.device_fingerprint == payload.device_fingerprint
+            and_(
+                DeviceBinding.device_fingerprint.in_([payload.device_fingerprint, raw_id]),
+                DeviceBinding.status == BindingStatus.ACTIVE
+            )
         )
     )
     binding = q.scalars().first()
     user_id = binding.user_id if binding else None
-    # don't invent a user_id for anonymous devices; leave null
+
+    # update device binding last_seen and status if bound
+    if binding:
+        binding.last_seen_at = datetime.datetime.now(datetime.timezone.utc)
+        db.add(binding)
+
+    # Filter out orphan events (null user) or unknown locations
+    if not user_id or not payload.location or payload.location.strip().lower() in ("unknown", "none", ""):
+        await db.commit()
+        return {"status": "ignored_unbound_or_unknown"}
+
     ev = Event(
         user_id=user_id,
         session_id=payload.session_id,
@@ -470,11 +484,6 @@ async def presence_event(payload: PresenceEvent, db: AsyncSession = Depends(get_
         location=payload.location,
     )
     db.add(ev)
-    # update device binding last_seen and status if bound
-    if binding:
-        binding.last_seen_at = datetime.datetime.now(datetime.timezone.utc)
-        binding.status = binding.status or "ACTIVE"
-        db.add(binding)
     await db.commit()
     await db.refresh(ev)
     return {"id": str(ev.id), "status": "ok"}
@@ -792,8 +801,8 @@ async def compute_attendance(
                 status=final_status.value,
                 enter_count=enter_count,
                 location_match=location_match,
-                wifi_scans=enter_count,
-                ble_scans=ble_scans_count,
+                wifi_scans=min(enter_count, baseline_scans),
+                ble_scans=min(ble_scans_count, baseline_scans),
                 total_scans_required=baseline_scans,
                 ble_verified=has_ble_verification,
             )

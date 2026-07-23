@@ -67,7 +67,7 @@ class Find3Subscriber:
         top_prob = guesses[0].get("probability", 1.0) if guesses else 0.0
 
         if not location and guesses:
-            if top_prob >= 0.70:
+            if top_prob >= 0.40:
                 location = top_loc
             else:
                 location = "unknown"
@@ -92,6 +92,10 @@ class Find3Subscriber:
     ):
         if not device_fingerprint:
             return
+        # Filter out unknown/empty location guesses
+        if not location or location.strip().lower() in ("unknown", "none", ""):
+            return
+
         SessionLocal = get_sessionmaker()
         async with SessionLocal() as db:
             try:
@@ -107,7 +111,10 @@ class Find3Subscriber:
                     )
                 )
                 row = q.first()
-                user_id = row.user_id if row else None
+                if not row or not row.user_id:
+                    # Ignore events for unbound or unregistered devices
+                    return
+                user_id = row.user_id
 
                 # Resolve session_id from active sessions at this location if not provided
                 # NEVER link corridor/hallway events to a classroom session

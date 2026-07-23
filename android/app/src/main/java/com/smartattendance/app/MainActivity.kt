@@ -123,11 +123,14 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Helper function to fetch attendance summary
+            // Helper function to fetch attendance summary (smooth background refresh)
             val fetchAttendanceForSession: (String, String) -> Unit = { id, loc ->
+                val isFirstLoad = (selectedSessionId != id || attendanceResults == null)
                 selectedSessionId = id
-                loadingAttendance = true
-                attendanceResults = null
+                if (isFirstLoad) {
+                    loadingAttendance = true
+                    attendanceResults = null
+                }
                 lifecycleScope.launch {
                     try {
                         val client = withContext(Dispatchers.IO) { ApiClient(serverUrl) }
