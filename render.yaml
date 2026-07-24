@@ -1,0 +1,35 @@
+services:
+  # 1. FastAPI Backend Server
+  - type: web
+    name: smart-attendance-server
+    env: docker
+    dockerContext: ./server
+    dockerfilePath: ./server/Dockerfile
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smart-attendance-db
+          property: connectionString
+      - key: FIND3_URL
+        value: http://smart-attendance-find3:8003
+      - key: JWT_SECRET
+        generateValue: true
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8000
+
+  # 2. FIND3 Engine Service
+  - type: web
+    name: smart-attendance-find3
+    env: docker
+    image: schollz/find3:latest
+    plan: free
+
+databases:
+  # 3. Managed PostgreSQL Database
+  - name: smart-attendance-db
+    databaseName: attendance_db
+    user: attendance_user
+    plan: free
