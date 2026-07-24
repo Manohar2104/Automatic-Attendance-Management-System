@@ -29,7 +29,7 @@ class PreferencesManager(private val context: Context) {
         val TOTAL_SCANS = androidx.datastore.preferences.core.intPreferencesKey("total_scans")
         val VALID_SCANS = androidx.datastore.preferences.core.intPreferencesKey("valid_scans")
 
-        const val DEFAULT_SERVER_URL = "http://i2ukjb-ip-152-57-126-43.tunnelmole.net"
+        const val DEFAULT_SERVER_URL = "http://aa1zw8-ip-152-57-134-90.tunnelmole.net"
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->

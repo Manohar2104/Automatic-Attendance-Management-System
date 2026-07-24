@@ -138,14 +138,14 @@ fun MainScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            if (scanning) "Attendance Active" else "Attendance Paused",
+                            if (scanning) "Attendance Active 🔒" else "Attendance Paused",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = if (scanning) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            if (scanning) "3 rapid scans at start of every minute" else "Tap the switch to start scanning",
+                            if (scanning) "Scanning locked until session ends" else "Tap switch & authenticate to start scanning",
                             style = MaterialTheme.typography.bodySmall,
                             color = if (scanning) Color.White.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )

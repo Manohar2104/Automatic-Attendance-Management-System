@@ -8,6 +8,8 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
+
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -235,6 +237,38 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            // Auto-stop scanning for Student when active session ends
+            LaunchedEffect(userRole, scanning, serverUrl, accessToken) {
+                if (userRole == "STUDENT" && scanning && serverUrl.isNotBlank() && accessToken.isNotBlank()) {
+                    var sessionWasActive = false
+                    while (scanning) {
+                        delay(10_000)
+                        try {
+                            val client = withContext(Dispatchers.IO) { ApiClient(serverUrl) }
+                            val activeSessions = withContext(Dispatchers.IO) {
+                                client.api.getSessions("Bearer $accessToken")
+                            }
+                            val hasActiveSession = activeSessions.any { it.status.uppercase() == "ACTIVE" }
+                            if (hasActiveSession) {
+                                sessionWasActive = true
+                            } else if (sessionWasActive) {
+                                Log.i(TAG, "Active session completed. Auto-stopping student scanning.")
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(this@MainActivity, "Session completed. Scanning turned off.", Toast.LENGTH_LONG).show()
+                                    scanning = false
+                                }
+                                prefs.setScanning(false)
+                                stopWiFiScanService()
+                                WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
+                                break
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error checking active session for auto-stop", e)
+                        }
+                    }
+                }
+            }
+
             if (!isRegistered) {
                 RegistrationScreen(
                     onRegister = { email, password, role ->
@@ -381,10 +415,11 @@ class MainActivity : FragmentActivity() {
                                     requestAppPermissions()
                                 }
                             } else {
-                                scanning = false
-                                lifecycleScope.launch { prefs.setScanning(false) }
-                                stopWiFiScanService()
-                                WorkManager.getInstance(this@MainActivity).cancelUniqueWork("presence_submission")
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Attendance scanning is locked for the duration of the active session.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         },
                         onServerUrlChange = { url ->

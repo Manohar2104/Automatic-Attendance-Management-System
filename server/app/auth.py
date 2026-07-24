@@ -92,3 +92,24 @@ async def get_current_user(
 
 async def require_current_user(user=Depends(get_current_user)):
     return user
+
+
+async def get_current_user_optional(
+    authorization: str = Header(None), db: AsyncSession = Depends(get_db)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        user_id = payload.get("sub")
+        if user_id:
+            try:
+                user_id = uuid.UUID(user_id)
+            except Exception:
+                pass
+            q = await db.execute(select(User).where(User.id == user_id))
+            return q.scalars().first()
+    except Exception:
+        pass
+    return None

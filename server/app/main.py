@@ -11,6 +11,7 @@ from .auth import (
     verify_password,
     create_access_token,
     create_refresh_token,
+    get_current_user_optional,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, cast, String
@@ -1025,7 +1026,7 @@ async def update_session_status(
 
 @app.get("/sessions")
 async def list_sessions(
-    db: AsyncSession = Depends(get_db), current_user=Depends(require_current_user)
+    db: AsyncSession = Depends(get_db), current_user=Depends(get_current_user_optional)
 ):
     """List all sessions, filtering by assigned faculty if caller has FACULTY role."""
     from .models import Session, User, RoleEnum
@@ -1033,7 +1034,7 @@ async def list_sessions(
 
     stmt = select(Session, User.email).outerjoin(User, Session.faculty_id == User.id)
 
-    if current_user.role == RoleEnum.FACULTY:
+    if current_user and current_user.role == RoleEnum.FACULTY:
         stmt = stmt.where(
             or_(
                 Session.faculty_id == current_user.id,
