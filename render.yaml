@@ -13,6 +13,8 @@ services:
           property: connectionString
       - key: FIND3_URL
         value: http://smart-attendance-find3:8003
+      - key: FIND3_WS_URL
+        value: ws://smart-attendance-find3:8005/ws?family=pes
       - key: JWT_SECRET
         generateValue: true
       - key: HOST
