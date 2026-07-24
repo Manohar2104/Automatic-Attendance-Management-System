@@ -574,7 +574,8 @@ async def proxy_find3_data(payload: dict, db: AsyncSession = Depends(get_db)):
 
     async with httpx.AsyncClient() as client:
         try:
-            res = await client.post("http://find3:8003/data", json=payload, timeout=5.0)
+            target_url = f"{settings.find3_url.rstrip('/')}/data"
+            res = await client.post(target_url, json=payload, timeout=5.0)
             res_json = res.json()
             guesses = res_json.get("guesses", [])
             top_guess = guesses[0].get("location") if guesses else "None"

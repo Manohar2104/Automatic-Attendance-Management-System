@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     present_threshold_percent: int = 70
     partial_threshold_percent: int = 40
     min_crowd_size: int = 3
+    # optional find3 HTTP URL (http:// or https://)
+    find3_url: str = "http://smart-attendance-find3:8003"
     # optional find3 websocket URL (ws:// or wss://)
     find3_ws_url: str = ""
     # Redis configuration
