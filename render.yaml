@@ -25,9 +25,11 @@ services:
   # 2. FIND3 Engine Service
   - type: web
     name: smart-attendance-find3
-    env: docker
-    image: schollz/find3:latest
+    env: image
+    image:
+      url: docker.io/schollz/find3:latest
     plan: free
+
 
 databases:
   # 3. Managed PostgreSQL Database
