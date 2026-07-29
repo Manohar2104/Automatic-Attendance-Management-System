@@ -16,6 +16,7 @@ from .auth import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, cast, String
 import asyncio
+import json
 import datetime
 from .schemas import DeviceRegister, PresenceEvent, DeviceInfo
 from .models import (
@@ -70,6 +71,37 @@ async def session_scheduler_task():
         await asyncio.sleep(15)  # Run every 15 seconds for fast session activation
 
 
+async def rehydrate_find3_data():
+    """Re-feed saved location training scans from PostgreSQL into FIND3 location engine on server boot."""
+    from .db import get_sessionmaker
+    from .models import Find3TrainingPayload
+    import httpx
+
+    SessionLocal = get_sessionmaker()
+    async with SessionLocal() as db:
+        try:
+            res = await db.execute(select(Find3TrainingPayload))
+            records = res.scalars().all()
+            if not records:
+                logger.info("No saved FIND3 training payloads found in PostgreSQL DB to rehydrate.")
+                return
+
+            logger.info(f"Rehydrating {len(records)} FIND3 location training scan(s) from PostgreSQL into FIND3 engine...")
+            async with httpx.AsyncClient() as client:
+                target_url = f"{settings.find3_url.rstrip('/')}/data"
+                success_count = 0
+                for rec in records:
+                    try:
+                        payload_data = json.loads(rec.payload)
+                        await client.post(target_url, json=payload_data, timeout=5.0)
+                        success_count += 1
+                    except Exception as err:
+                        logger.warning(f"Failed to rehydrate FIND3 payload {rec.id}: {err}")
+                logger.info(f"Successfully rehydrated {success_count}/{len(records)} training scan(s) to FIND3 engine!")
+        except Exception as e:
+            logger.error(f"Error during FIND3 data rehydration: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app):
     # startup
@@ -85,6 +117,8 @@ async def lifespan(app):
         except Exception:
             pass
     await start_subscriber(app)
+    asyncio.create_task(rehydrate_find3_data())
+
 
     # Initialize Redis
     try:
@@ -571,6 +605,25 @@ async def proxy_find3_data(payload: dict, db: AsyncSession = Depends(get_db)):
                 f"BLE scan received but no active binding found for device '{device_id}' "
                 f"(tried raw='{raw_device_id}'). No proximity recorded."
             )
+
+    # Check if this is a training scan (contains a location label) and save to PostgreSQL
+    loc_label = payload.get("l") or payload.get("location")
+    if loc_label:
+        try:
+            from .models import Find3TrainingPayload
+            fam = payload.get("f") or payload.get("family")
+            dev = payload.get("d") or payload.get("device")
+            tp = Find3TrainingPayload(
+                family=fam,
+                device=dev,
+                location=str(loc_label),
+                payload=json.dumps(payload)
+            )
+            db.add(tp)
+            await db.commit()
+            logger.info(f"PERSISTED FIND3 TRAINING SCAN: location='{loc_label}' to PostgreSQL")
+        except Exception as persist_ex:
+            logger.error(f"Failed to persist FIND3 training scan to DB: {persist_ex}")
 
     async with httpx.AsyncClient() as client:
         try:
