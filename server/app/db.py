@@ -13,6 +13,10 @@ def get_engine():
     global _engine, _SessionLocal
     if _engine is None:
         DATABASE_URL = settings.database_url
+        if DATABASE_URL.startswith("postgres://"):
+            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif DATABASE_URL.startswith("postgresql://") and "+asyncpg" not in DATABASE_URL:
+            DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
         connect_args = {}
         if "asyncpg" in DATABASE_URL:
             from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
